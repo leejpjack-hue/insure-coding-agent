@@ -110,9 +110,14 @@ export class AgentLoop {
           timestamp: Date.now(),
         });
 
-        // Check if this looks like completion
+        // Check if this looks like completion (only if it's explicitly ending)
         const content = (response.content || '').toLowerCase();
-        if (content.includes('task complete') || content.includes('done') || content.includes('finished')) {
+        if (content.includes('task complete') || content.includes('[done]') || content.includes('[finished]')) {
+          this.thinkingLoop.markCompleted();
+          break;
+        }
+        // If no more tool calls and substantive response, complete after 1 text response
+        if (this.thinkingLoop.getState().iteration > 0) {
           this.thinkingLoop.markCompleted();
           break;
         }

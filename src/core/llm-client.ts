@@ -25,7 +25,9 @@ export class LLMClient {
 
   async chat(opts: LLMClientOptions): Promise<LLMResponse> {
     const { model } = opts;
-    const baseUrl = model.baseUrl || this.providerUrls.get(model.provider);
+    const baseUrl = model.baseUrl
+      ? (model.baseUrl.includes('/chat/completions') || model.baseUrl.includes('/v1/messages') ? model.baseUrl : model.baseUrl + '/chat/completions')
+      : this.providerUrls.get(model.provider);
     if (!baseUrl) throw new Error(`Unknown provider: ${model.provider}`);
 
     const apiKey = model.apiKey || process.env[`${model.provider.toUpperCase()}_API_KEY`];

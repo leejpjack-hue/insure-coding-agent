@@ -15,9 +15,10 @@ export function loadConfig(overrides) {
         host: process.env.INSURE_AGENT_HOST || '0.0.0.0',
         dbPath: process.env.INSURE_AGENT_DB_PATH || './data/insure-agent.db',
         defaultModel: {
-            provider: process.env.DEFAULT_MODEL_PROVIDER || 'anthropic',
-            model: process.env.DEFAULT_MODEL || 'claude-sonnet-4-20250514',
-            apiKey: process.env.ANTHROPIC_API_KEY,
+            provider: process.env.DEFAULT_MODEL_PROVIDER || 'openai',
+            model: process.env.DEFAULT_MODEL || 'anthropic/claude-sonnet-4-20250514',
+            apiKey: process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY,
+            baseUrl: process.env.ANTHROPIC_BASE_URL || process.env.OPENAI_BASE_URL,
         },
         modelRoutes: DEFAULT_MODELS,
         safetyLimits: {
