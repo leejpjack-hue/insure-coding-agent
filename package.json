@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Insurance Agency Management System Coding Agent",
   "type": "module",
+  "bin": {
+    "insure-agent": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "PHASES.md"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/main.js",
