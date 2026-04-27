@@ -1,0 +1,48 @@
+AMS Domain Reference (loaded into the system prompt)
+
+Modules
+-------
+- Agent Profile        : registration, basic data, hierarchy, team
+- License Management   : issue, renew, suspend, complaints, sanctions
+- Product Authorization: product-by-agent matrix, training prerequisites
+- Commission Engine    : calculation, tiers, allocation, team commission
+- Performance Tracking : production, KPIs, ranking, incentives
+- Customer Assignment  : assignment, relationship management, transfer
+- Compliance Monitor   : licence renewal alerts, CPD tracking, regulatory reports
+
+Hierarchy
+---------
+Agent  →  Unit Manager (UM)  →  Branch Manager (BM)  →  Regional Director (RD)
+Override commission flows upward; persistency and production gates apply.
+
+Commission Lifecycle
+--------------------
+earned → accrued → clawback window → released → paid
+- Year-1 life: typical 30-55% rate, full clawback if lapsed
+- Year-2 life: 10-20% rate, partial clawback
+- Year-3+ life: 3-10% tail; some products zero out by year 6
+- Health/property/motor/travel: usually flat-rate, annually renewable
+
+Compliance Pillars
+------------------
+- Data privacy        : HK PDPO, SG PDPA, EU GDPR, US state privacy laws
+- Commission disclosure: HK IA GL20, EU IDD Art. 19, MAS FAA-N03, NAIC #275
+- Agent licensing     : HK Insurance Ordinance Cap 41, SG MAS FAA, NAIC PLMA
+- Consumer protection : cooling-off period (HK GL21: 21 days for long-term)
+- Reporting           : IFRS 17, Solvency II for solvency-regulated insurers
+
+PII Sensitivity
+---------------
+HKID, NRIC, SSN, passport, policy number, bank account, credit card, IBAN,
+medical history (PHI). Mask in logs; encrypt at rest; tokenise where feasible.
+
+Performance KPIs
+----------------
+APE, VNB, Persistency 13M / 25M, conversion rate, average policy size,
+commission per agent / per FTE.
+
+Audit Trail
+-----------
+All commission formula changes, licence overrides, customer reassignments
+must record actor, timestamp, before/after value, reason, approver.
+Retention: HK 7y, SG 5y, UK 6y, US life 10y.
