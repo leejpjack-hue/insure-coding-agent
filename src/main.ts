@@ -1,3 +1,4 @@
+import "./core/env.js";
 import { loadConfig } from './core/config.js';
 import { createServer } from './server/index.js';
 import { initDatabase } from './core/database.js';

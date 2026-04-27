@@ -25,7 +25,8 @@
     "@ai-sdk/anthropic": "^1.0.0",
     "@ai-sdk/openai": "^1.0.0",
     "@ai-sdk/google": "^1.0.0",
-    "hono": "^4.0.0"
+    "hono": "^4.0.0",
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.0",
