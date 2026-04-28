@@ -4,7 +4,7 @@ import {
 import { ToolExecutor } from './tool-executor.js';
 import { ToolRegistry } from './tool-registry.js';
 import { ContextAssembler } from './context-assembler.js';
-import { LLMClient, LLMResponse, LLMStreamChunk } from './llm-client.js';
+import { LLMClient, LLMResponse, LLMStreamChunk, OpenAITool } from './llm-client.js';
 import { ThinkingLoop, ThinkingLoopOptions, ThinkingLoopState } from './thinking-loop.js';
 import { CheckpointManager } from './checkpoint.js';
 import { SessionManager } from './session.js';
@@ -176,7 +176,13 @@ export class AgentLoop {
           this.thinkingLoop.markCompleted();
           break;
         }
-        if (this.thinkingLoop.getState().iteration > 1) {
+        // Any substantial text response is treated as complete — the model
+        // would have called tools if it needed to do more work.
+        if ((response.content || '').length > 50) {
+          this.thinkingLoop.markCompleted();
+          break;
+        }
+        if (this.thinkingLoop.getState().iteration > 3) {
           this.thinkingLoop.markCompleted();
           break;
         }
@@ -248,6 +254,7 @@ export class AgentLoop {
           model: this.modelConfig,
           systemPrompt: context,
           messages,
+          tools: this.getToolDefinitions(),
         });
 
         const outputEstimate = this.estimateTokens(
@@ -283,11 +290,14 @@ export class AgentLoop {
     const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
     let inThinking = false;
 
+    const toolDefs = this.getToolDefinitions();
+
     try {
       for await (const chunk of this.llmClient.chatStream({
         model: this.modelConfig,
         systemPrompt: context,
         messages,
+        tools: toolDefs,
       })) {
         switch (chunk.type) {
           case 'reasoning':
@@ -332,6 +342,7 @@ export class AgentLoop {
         model: this.modelConfig,
         systemPrompt: context,
         messages,
+        tools: toolDefs,
       });
       if (response.reasoning) {
         this.onEvent?.({ type: 'thinking_start' });
@@ -553,6 +564,28 @@ export class AgentLoop {
 
   private emitIterationEvent(state: ThinkingLoopState): void {
     // kept for ThinkingLoop compatibility
+  }
+
+  /** Convert registered tools to OpenAI function-calling format. */
+  private getToolDefinitions(): OpenAITool[] {
+    return this.registry.list().map(def => ({
+      type: 'function' as const,
+      function: {
+        name: def.name,
+        description: def.description,
+        parameters: {
+          type: 'object' as const,
+          properties: Object.fromEntries(
+            def.params.map(p => [p.name, {
+              type: p.type,
+              description: p.description,
+              ...(p.default !== undefined ? { default: p.default } : {}),
+            }])
+          ),
+          required: def.params.filter(p => p.required).map(p => p.name),
+        },
+      },
+    }));
   }
 
   private finalizeAgentState(): AgentState {

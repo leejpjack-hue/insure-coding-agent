@@ -12,12 +12,26 @@ export interface LLMResponse {
   followUpQuestion?: string;
 }
 
+export interface OpenAITool {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: 'object';
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+  };
+}
+
 export interface LLMClientOptions {
   model: ModelConfig;
   systemPrompt: string;
   messages: Array<{ role: string; content: string }>;
   maxTokens?: number;
   temperature?: number;
+  tools?: OpenAITool[];
 }
 
 export interface LLMStreamChunk {
@@ -205,12 +219,16 @@ export class LLMClient {
   }
 
   private buildBody(opts: LLMClientOptions): Record<string, unknown> {
-    const { model, messages, maxTokens, temperature } = opts;
+    const { model, messages, maxTokens, temperature, tools } = opts;
+
+    // GLM models share token budget between reasoning and content — needs a
+    // much larger budget so long thinking doesn't starve the actual output.
+    const defaultMaxTokens = model.provider === 'zhipu' ? 16384 : 4096;
 
     if (model.provider === 'anthropic') {
       return {
         model: model.model,
-        max_tokens: maxTokens || 4096,
+        max_tokens: maxTokens || defaultMaxTokens,
         system: opts.systemPrompt,
         messages: messages.map(m => ({ role: m.role === 'tool' ? 'user' : m.role, content: m.content })),
         temperature: temperature || 0.1,
@@ -218,15 +236,21 @@ export class LLMClient {
     }
 
     // OpenAI-compatible (OpenAI, DeepSeek, Google, Zhipu)
-    return {
+    const body: Record<string, unknown> = {
       model: model.model,
-      max_tokens: maxTokens || 4096,
+      max_tokens: maxTokens || defaultMaxTokens,
       messages: [
         { role: 'system', content: opts.systemPrompt },
         ...messages.map(m => ({ role: m.role === 'tool' ? 'assistant' : m.role, content: m.content })),
       ],
       temperature: temperature || 0.1,
     };
+
+    if (tools && tools.length > 0) {
+      body.tools = tools;
+    }
+
+    return body;
   }
 
   private parseResponse(provider: string, data: Record<string, unknown>): LLMResponse {
