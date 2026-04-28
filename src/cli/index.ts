@@ -13,14 +13,19 @@ import { createLicenseChecker } from '../tools/license-checker.js';
 import { createSchemaReader } from '../tools/schema-reader.js';
 import { createApiTester } from '../tools/api-tester.js';
 import { createComplianceChecker } from '../tools/compliance-checker.js';
+import { startChat } from './chat.js';
 
 function printUsage(): void {
   console.log(`
 InsureAgent — Insurance AMS Coding Agent v0.1.0
 
 Usage:
+  insure-agent chat                           Interactive chat (Claude Code style)
   insure-agent serve                          Start API server
   insure-agent run <task>                     Run a one-shot task
+  insure-agent auth login                     Sign in to GitHub Copilot (device flow)
+  insure-agent auth logout                    Sign out of GitHub Copilot
+  insure-agent auth status                    Show current Copilot login state
   insure-agent session list                   List sessions
   insure-agent session show <id>              Show session details
   insure-agent tools list                     List available tools
@@ -68,6 +73,64 @@ async function main(): Promise<void> {
   } as any);
 
   const command = args[0];
+
+  // === chat (default) ===
+  if (command === 'chat' || command === undefined) {
+    await startChat();
+    return;
+  }
+
+  // === auth (GitHub Copilot OAuth) ===
+  if (command === 'auth') {
+    const sub = args[1];
+    const auth = await import('../core/copilot-auth.js');
+
+    if (sub === 'login') {
+      console.log('Starting GitHub Copilot device-flow login...\n');
+      try {
+        const { login } = await auth.loginDeviceFlow({
+          onPrompt: (info) => {
+            console.log('\x1b[1m\x1b[36mOpen this URL and enter the code:\x1b[0m');
+            console.log(`  URL:  \x1b[4m${info.verification_uri}\x1b[0m`);
+            console.log(`  Code: \x1b[1m\x1b[33m${info.user_code}\x1b[0m`);
+            console.log(`\nWaiting for authorisation (expires in ${Math.floor(info.expires_in / 60)} min)...`);
+          },
+        });
+        console.log(`\n\x1b[32m✓ Logged in as ${login}\x1b[0m`);
+        console.log('Set DEFAULT_MODEL_PROVIDER=copilot in your .env to route through Copilot.');
+      } catch (err) {
+        console.error(`\x1b[31m✗ Login failed: ${(err as Error).message}\x1b[0m`);
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (sub === 'logout') {
+      const ok = auth.logout();
+      console.log(ok ? '✓ Signed out.' : 'No active Copilot session.');
+      return;
+    }
+
+    if (sub === 'status') {
+      const s = auth.status();
+      if (s.loggedIn) {
+        console.log(`Signed in as \x1b[1m${s.login}\x1b[0m`);
+        console.log(`Token cached at: ${s.configPath}`);
+        try {
+          const tok = await auth.getCopilotToken();
+          console.log(`\x1b[32m✓ Copilot token resolved (${tok.length} chars)\x1b[0m`);
+        } catch (e) {
+          console.log(`\x1b[33m⚠ Token exchange failed: ${(e as Error).message}\x1b[0m`);
+        }
+      } else {
+        console.log('Not signed in. Run: insure-agent auth login');
+      }
+      return;
+    }
+
+    console.error('Usage: insure-agent auth login|logout|status');
+    process.exit(1);
+  }
 
   // === serve ===
   if (command === 'serve') {

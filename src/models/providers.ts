@@ -31,6 +31,24 @@ export const PROVIDERS: ProviderInfo[] = [
       { provider: 'deepseek', model: 'deepseek-v4-flash', costPer1kInput: 0.0001, costPer1kOutput: 0.0004 },
     ],
   },
+  {
+    name: 'zhipu',
+    models: [
+      { provider: 'zhipu', model: 'glm-5.1', costPer1kInput: 0.005, costPer1kOutput: 0.05 },
+    ],
+  },
+  {
+    // GitHub Copilot (OAuth device flow). Cost is paid per Copilot subscription,
+    // not per-token; 0/0 here so cost calculations don't mislead.
+    name: 'copilot',
+    models: [
+      { provider: 'copilot', model: 'gpt-4.1', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'claude-sonnet-4', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'claude-opus-4', thinking: true, costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'gemini-2.5-pro', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'o4-mini', costPer1kInput: 0, costPer1kOutput: 0 },
+    ],
+  },
 ];
 
 export function getProviderModels(provider: string): ModelConfig[] {

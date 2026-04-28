@@ -93,7 +93,7 @@ export interface LSPDiagnostic {
 }
 
 // ===== Model =====
-export type ModelProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'custom';
+export type ModelProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'zhipu' | 'copilot' | 'custom';
 
 export interface ModelConfig {
   provider: ModelProvider;

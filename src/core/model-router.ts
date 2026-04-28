@@ -14,6 +14,7 @@ const ROUTES: RouteRule[] = [
   { taskType: 'compliance_check', model: { provider: 'openai', model: 'gpt-4o-mini', costPer1kInput: 0.00015, costPer1kOutput: 0.0006 } },
   { taskType: 'documentation', model: { provider: 'google', model: 'gemini-2.5-pro', costPer1kInput: 0.00125, costPer1kOutput: 0.005 } },
   { taskType: 'daily_completion', model: { provider: 'deepseek', model: 'deepseek-v4-flash', costPer1kInput: 0.0001, costPer1kOutput: 0.0004 } },
+  { taskType: 'general', model: { provider: 'zhipu', model: 'glm-5.1', costPer1kInput: 0.005, costPer1kOutput: 0.05 } },
 ];
 
 export class ModelRouter {

@@ -4,12 +4,25 @@ import {
 import { ToolExecutor } from './tool-executor.js';
 import { ToolRegistry } from './tool-registry.js';
 import { ContextAssembler } from './context-assembler.js';
-import { LLMClient, LLMResponse } from './llm-client.js';
+import { LLMClient, LLMResponse, LLMStreamChunk } from './llm-client.js';
 import { ThinkingLoop, ThinkingLoopOptions, ThinkingLoopState } from './thinking-loop.js';
 import { CheckpointManager } from './checkpoint.js';
 import { SessionManager } from './session.js';
 import { SafetyManager } from './safety-manager.js';
 import { eventBus } from './events.js';
+
+// Events emitted by the agent loop for CLI display
+export type AgentEvent =
+  | { type: 'thinking_start' }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'thinking_end' }
+  | { type: 'text_delta'; text: string }
+  | { type: 'text_end'; content: string }
+  | { type: 'tool_call_start'; name: string; params: Record<string, unknown> }
+  | { type: 'tool_result'; name: string; content: string; status: string; duration: number }
+  | { type: 'error'; error: string }
+  | { type: 'iteration'; iteration: number }
+  | { type: 'complete'; result: string; iterations: number; tokens: number; cost: number };
 
 export interface AgentLoopOptions {
   sessionId: string;
@@ -23,6 +36,7 @@ export interface AgentLoopOptions {
   requireApprovalAfter?: number;
   maxRetries?: number;
   needApproval?: (iteration: number, description: string) => Promise<boolean>;
+  onEvent?: (event: AgentEvent) => void;
 }
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -30,7 +44,6 @@ const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 const CHARS_PER_TOKEN = 4;
 
-// Completion signals the LLM uses to indicate the task is done
 const COMPLETION_MARKERS = [
   'task complete', 'task completed', '[done]', '[finished]',
   '## summary', '### summary', '## final result',
@@ -51,8 +64,8 @@ export class AgentLoop {
   private projectRoot: string;
   private modelConfig: ModelConfig;
   private maxRetries: number;
+  private onEvent?: (event: AgentEvent) => void;
 
-  // Tracking state
   private filesModified: Set<string> = new Set();
   private testsRun: number = 0;
   private testsPassed: number = 0;
@@ -66,11 +79,12 @@ export class AgentLoop {
     this.registry = opts.registry;
     this.sessionManager = opts.sessionManager;
     this.maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.onEvent = opts.onEvent;
 
     const session = this.sessionManager.getSession(opts.sessionId);
     this.modelConfig = opts.modelConfig ?? session?.modelConfig ?? {
-      provider: 'openai',
-      model: 'anthropic/claude-sonnet-4-20250514',
+      provider: 'zhipu',
+      model: 'glm-5.1',
     };
 
     this.checkpointManager = new CheckpointManager();
@@ -111,7 +125,6 @@ export class AgentLoop {
     this.totalTokensUsed = 0;
     this.totalCost = 0;
 
-    // Record user message
     this.sessionManager.addMessage({
       sessionId: this.sessionId,
       role: 'user',
@@ -119,11 +132,8 @@ export class AgentLoop {
       timestamp: Date.now(),
     });
 
-    // Main agent loop
     while (this.thinkingLoop.shouldContinue()) {
       const history = this.sessionManager.getHistory(this.sessionId);
-
-      // 1. Assemble full context
       const context = this.contextAssembler.assemble({
         sessionId: this.sessionId,
         projectRoot: this.projectRoot,
@@ -132,7 +142,6 @@ export class AgentLoop {
         registry: this.registry,
       });
 
-      // 2. Call LLM with retry + exponential backoff
       let response: LLMResponse;
       try {
         response = await this.callLLMWithRetry(context, history);
@@ -140,8 +149,8 @@ export class AgentLoop {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.thinkingLoop.recordFailure(message);
+        this.onEvent?.({ type: 'error', error: message });
 
-        // Record the error as an assistant message for context continuity
         this.sessionManager.addMessage({
           sessionId: this.sessionId,
           role: 'assistant',
@@ -149,7 +158,6 @@ export class AgentLoop {
           timestamp: Date.now(),
         });
 
-        // If all retries exhausted, mark as failed
         const loopState = this.thinkingLoop.getState();
         if (loopState.consecutiveFails >= (this.thinkingLoop as unknown as { options: ThinkingLoopOptions }).options.maxConsecutiveFails) {
           this.thinkingLoop.markFailed(`Max consecutive LLM failures reached: ${message}`);
@@ -159,15 +167,15 @@ export class AgentLoop {
       }
 
       this.thinkingLoop.incrementIteration(response.type);
+      this.onEvent?.({ type: 'iteration', iteration: this.thinkingLoop.getState().iteration });
 
-      // 3. Handle response by type
       if (response.type === 'text') {
+        this.onEvent?.({ type: 'text_end', content: response.content || '' });
         const handled = this.handleTextResponse(response.content || '');
         if (handled === 'completed') {
           this.thinkingLoop.markCompleted();
           break;
         }
-        // Text response without completion marker — continue if we've done work
         if (this.thinkingLoop.getState().iteration > 1) {
           this.thinkingLoop.markCompleted();
           break;
@@ -175,11 +183,24 @@ export class AgentLoop {
         continue;
       }
 
-      if (response.type === 'tool_use' && response.toolCall) {
-        const result = await this.handleToolUse(response.toolCall);
-        if (result === 'paused') {
-          break;
+      if (response.type === 'tool_use') {
+        const calls = response.toolCalls && response.toolCalls.length > 0
+          ? response.toolCalls
+          : (response.toolCall ? [response.toolCall] : []);
+        if (calls.length === 0) continue;
+
+        // Process all tool calls returned in this assistant turn. We execute
+        // them serially so each tool result is recorded in session history
+        // before the next call sees it (a few tools — file_edit, file_write,
+        // bash_execute — depend on side-effects of earlier calls). Independent
+        // reads will execute fast either way; if you need true parallel reads
+        // see docs/agent-loop-review.md.
+        let paused = false;
+        for (const tc of calls) {
+          const result = await this.handleToolUse(tc);
+          if (result === 'paused') { paused = true; break; }
         }
+        if (paused) break;
         continue;
       }
 
@@ -190,7 +211,16 @@ export class AgentLoop {
       }
     }
 
-    return this.finalizeAgentState();
+    const state = this.finalizeAgentState();
+    this.onEvent?.({
+      type: 'complete',
+      result: state.status === 'failed' ? 'Task failed' : 'Task completed',
+      iterations: state.currentIteration,
+      tokens: state.totalTokensUsed,
+      cost: state.totalCost,
+    });
+
+    return state;
   }
 
   private async callLLMWithRetry(
@@ -206,9 +236,13 @@ export class AgentLoop {
           content: this.buildMessageContent(m),
         }));
 
-        // Estimate input tokens for tracking
         const inputEstimate = this.estimateTokens(context + messages.map(m => m.content).join(''));
         this.addTokenUsage(inputEstimate);
+
+        // Use streaming when an event listener is attached
+        if (this.onEvent) {
+          return await this.callLLMStreaming(context, messages);
+        }
 
         const response = await this.llmClient.chat({
           model: this.modelConfig,
@@ -216,7 +250,6 @@ export class AgentLoop {
           messages,
         });
 
-        // Estimate output tokens
         const outputEstimate = this.estimateTokens(
           response.content || '' +
           (response.toolCall ? JSON.stringify(response.toolCall.params) : '') +
@@ -241,6 +274,103 @@ export class AgentLoop {
     throw lastError ?? new Error('LLM call failed after retries');
   }
 
+  private async callLLMStreaming(
+    context: string,
+    messages: Array<{ role: string; content: string }>,
+  ): Promise<LLMResponse> {
+    let reasoning = '';
+    let content = '';
+    const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
+    let inThinking = false;
+
+    try {
+      for await (const chunk of this.llmClient.chatStream({
+        model: this.modelConfig,
+        systemPrompt: context,
+        messages,
+      })) {
+        switch (chunk.type) {
+          case 'reasoning':
+            if (!inThinking) {
+              this.onEvent?.({ type: 'thinking_start' });
+              inThinking = true;
+            }
+            reasoning += chunk.text || '';
+            this.onEvent?.({ type: 'thinking_delta', text: chunk.text || '' });
+            break;
+          case 'content':
+            if (inThinking) {
+              this.onEvent?.({ type: 'thinking_end' });
+              inThinking = false;
+            }
+            content += chunk.text || '';
+            this.onEvent?.({ type: 'text_delta', text: chunk.text || '' });
+            break;
+          case 'tool_call_start':
+            if (inThinking) {
+              this.onEvent?.({ type: 'thinking_end' });
+              inThinking = false;
+            }
+            toolCalls.push({ id: chunk.toolCall!.id, name: chunk.toolCall!.name, arguments: '' });
+            break;
+          case 'tool_call_delta':
+            if (toolCalls.length > 0) {
+              toolCalls[toolCalls.length - 1].arguments += chunk.toolCall!.argumentsDelta;
+            }
+            break;
+          case 'done':
+            if (inThinking) {
+              this.onEvent?.({ type: 'thinking_end' });
+              inThinking = false;
+            }
+            break;
+        }
+      }
+    } catch {
+      // Stream failed, fall back to non-streaming
+      const response = await this.llmClient.chat({
+        model: this.modelConfig,
+        systemPrompt: context,
+        messages,
+      });
+      if (response.reasoning) {
+        this.onEvent?.({ type: 'thinking_start' });
+        this.onEvent?.({ type: 'thinking_delta', text: response.reasoning });
+        this.onEvent?.({ type: 'thinking_end' });
+      }
+      if (response.content) {
+        this.onEvent?.({ type: 'text_delta', text: response.content });
+      }
+      this.onEvent?.({ type: 'text_end', content: response.content || '' });
+      // The non-streaming fallback already returns toolCalls plural when present,
+      // so the run() loop will iterate over them. tool_call_start is emitted
+      // from handleToolUse() per call.
+      return response;
+    }
+
+    const outputEstimate = this.estimateTokens(reasoning + content + toolCalls.map(tc => tc.arguments).join(''));
+    this.addTokenUsage(outputEstimate);
+
+    if (toolCalls.length > 0) {
+      // Build typed ToolCall list. tool_call_start events are emitted from
+      // handleToolUse() so each call is announced right before it executes.
+      const built = toolCalls.map((tc, i) => ({
+        id: tc.id || `tc_${Date.now()}_${i}`,
+        name: tc.name,
+        params: this.safeParseToolArgs(tc.arguments),
+      }));
+      return {
+        type: 'tool_use',
+        reasoning,
+        toolCall: built[0],
+        toolCalls: built,
+      };
+    }
+
+    this.onEvent?.({ type: 'text_end', content });
+    return { type: 'text', content, reasoning };
+  }
+
   private handleTextResponse(content: string): 'completed' | 'continue' {
     this.sessionManager.addMessage({
       sessionId: this.sessionId,
@@ -259,8 +389,16 @@ export class AgentLoop {
     return 'continue';
   }
 
+  private safeParseToolArgs(args: string): Record<string, unknown> {
+    if (!args) return {};
+    try { return JSON.parse(args); } catch { return { _raw: args }; }
+  }
+
   private async handleToolUse(toolCall: ToolCall): Promise<'executed' | 'paused'> {
-    // Safety check
+    // Announce the tool call to listeners before any safety/approval gate so
+    // the CLI can render the step header even if the call is blocked.
+    this.onEvent?.({ type: 'tool_call_start', name: toolCall.name, params: toolCall.params });
+
     const safetyCheck = this.safetyManager.checkTool(toolCall.name, toolCall.params);
     if (!safetyCheck.allowed) {
       this.sessionManager.addMessage({
@@ -273,7 +411,6 @@ export class AgentLoop {
       return 'executed';
     }
 
-    // Request approval if needed
     if (safetyCheck.requiresConfirmation) {
       const approved = await this.thinkingLoop.checkApproval(
         `Execute tool "${toolCall.name}" with params: ${JSON.stringify(toolCall.params).substring(0, 200)}`,
@@ -294,7 +431,6 @@ export class AgentLoop {
       }
     }
 
-    // Record assistant message with tool call
     this.sessionManager.addMessage({
       sessionId: this.sessionId,
       role: 'assistant',
@@ -303,10 +439,16 @@ export class AgentLoop {
       timestamp: Date.now(),
     });
 
-    // Execute the tool
     const toolResult = await this.executor.execute(toolCall);
 
-    // Record tool result
+    this.onEvent?.({
+      type: 'tool_result',
+      name: toolCall.name,
+      content: toolResult.content,
+      status: toolResult.status,
+      duration: toolResult.duration,
+    });
+
     this.sessionManager.addMessage({
       sessionId: this.sessionId,
       role: 'tool',
@@ -315,10 +457,8 @@ export class AgentLoop {
       timestamp: Date.now(),
     });
 
-    // Track file modifications from tool results
     this.trackToolSideEffects(toolCall, toolResult.content);
 
-    // Record success or failure
     if (toolResult.status === 'error') {
       this.thinkingLoop.recordFailure(`Tool error: ${toolResult.content}`);
     } else {
@@ -345,7 +485,6 @@ export class AgentLoop {
   private trackToolSideEffects(toolCall: ToolCall, resultContent: string): void {
     const toolName = toolCall.name;
 
-    // Track file modifications
     if (toolName === 'file_write' || toolName === 'file_edit') {
       const filePath = String(toolCall.params.path || toolCall.params.filePath || '');
       if (filePath) {
@@ -353,7 +492,6 @@ export class AgentLoop {
       }
     }
 
-    // Track test results
     if (toolName === 'bash_execute') {
       const cmd = String(toolCall.params.command || '');
       if (cmd.includes('test') || cmd.includes('spec') || cmd.includes('jest') || cmd.includes('mocha') || cmd.includes('vitest')) {
@@ -375,7 +513,6 @@ export class AgentLoop {
   }
 
   private extractTestCount(text: string, type: 'passed' | 'failed'): number {
-    // Match common test output patterns
     const patterns = type === 'passed'
       ? [/(\d+)\s+pass(?:ed|ing)?/i, /tests?[:\s]+(\d+)\s+pass/i, /(\d+) successful/i]
       : [/(\d+)\s+fail(?:ed|ing)?/i, /tests?[:\s]+(\d+)\s+fail/i, /(\d+)\s+failing/i];
@@ -397,7 +534,6 @@ export class AgentLoop {
     this.totalTokensUsed += count;
     this.thinkingLoop.addTokens(count);
 
-    // Calculate cost
     const inputCost = this.modelConfig.costPer1kInput ?? 0;
     const outputCost = this.modelConfig.costPer1kOutput ?? 0;
     const avgCostPer1k = (inputCost + outputCost) / 2;
@@ -416,8 +552,7 @@ export class AgentLoop {
   }
 
   private emitIterationEvent(state: ThinkingLoopState): void {
-    // The onIteration callback is already called by ThinkingLoop.incrementIteration
-    // We use this to track any additional side effects
+    // kept for ThinkingLoop compatibility
   }
 
   private finalizeAgentState(): AgentState {

@@ -9,7 +9,7 @@ const DEFAULT_MODELS: Record<TaskType, ModelConfig> = {
   compliance_check: { provider: 'openai', model: 'gpt-4o-mini' },
   documentation: { provider: 'google', model: 'gemini-2.5-pro' },
   daily_completion: { provider: 'deepseek', model: 'deepseek-v4-flash' },
-  general: { provider: 'anthropic', model: 'claude-sonnet-4-20250514' },
+  general: { provider: 'zhipu', model: 'glm-5.1' },
 };
 
 export function loadConfig(overrides?: Partial<InsureAgentConfig>): InsureAgentConfig {
@@ -18,10 +18,10 @@ export function loadConfig(overrides?: Partial<InsureAgentConfig>): InsureAgentC
     host: process.env.INSURE_AGENT_HOST || '0.0.0.0',
     dbPath: process.env.INSURE_AGENT_DB_PATH || './data/insure-agent.db',
     defaultModel: {
-      provider: (process.env.DEFAULT_MODEL_PROVIDER as ModelProvider) || 'openai',
-      model: process.env.DEFAULT_MODEL || 'anthropic/claude-sonnet-4-20250514',
-      apiKey: process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY,
-      baseUrl: process.env.ANTHROPIC_BASE_URL || process.env.OPENAI_BASE_URL,
+      provider: (process.env.DEFAULT_MODEL_PROVIDER as ModelProvider) || 'zhipu',
+      model: process.env.DEFAULT_MODEL || 'glm-5.1',
+      apiKey: process.env.ZHIPU_API_KEY || process.env.OPENAI_API_KEY,
+      baseUrl: process.env.ZHIPU_BASE_URL || undefined,
     },
     modelRoutes: DEFAULT_MODELS,
     safetyLimits: {
