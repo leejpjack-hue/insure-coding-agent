@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { ToolRegistry } from '../src/core/tool-registry.js';
 import { createFileTools } from '../src/tools/file-tools.js';
 import { createBashTool } from '../src/tools/bash-tool.js';
-import { createGitTool } from '../src/tools/git-tool.js';
 import { createCommissionTool } from '../src/tools/commission-validator.js';
 import { createLicenseChecker } from '../src/tools/license-checker.js';
 import { createComplianceChecker } from '../src/tools/compliance-checker.js';

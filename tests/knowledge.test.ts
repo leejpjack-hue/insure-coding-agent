@@ -112,5 +112,42 @@ describe('KnowledgeBase facade', () => {
     assert.ok(s.commission > 0);
     assert.ok(s.licensing > 0);
     assert.ok(s.pii > 0);
+    assert.ok(s.systems >= 11);
+  });
+
+  it('finds insurance-system entries by alias and category', () => {
+    const kb = new KnowledgeBase();
+    const out = kb.search('AS400 policy admin', 5);
+    assert.ok(out.some(h => h.kind === 'system'));
+  });
+
+  it('finds the AML system by acronym', () => {
+    const kb = new KnowledgeBase();
+    const out = kb.search('aml sanctions screening', 5);
+    assert.ok(out.some(h => h.kind === 'system'));
+  });
+});
+
+describe('Insurance systems catalogue', () => {
+  it('exposes all expected systems', async () => {
+    const { INSURANCE_SYSTEMS, getSystem } = await import('../src/knowledge/insurance-systems.js');
+    const required = [
+      'quotation_system', 'as400_life', 'underwriting_system', 'ams',
+      'agency_portal', 'pos', 'customer_portal', 'payment_gateway',
+      'data_warehouse', 'bpm', 'aml_system',
+    ];
+    for (const id of required) {
+      assert.ok(getSystem(id), `missing system: ${id}`);
+    }
+    assert.equal(INSURANCE_SYSTEMS.length, required.length);
+  });
+
+  it('every system has responsibilities, owned entities and compliance hotspots', async () => {
+    const { INSURANCE_SYSTEMS } = await import('../src/knowledge/insurance-systems.js');
+    for (const s of INSURANCE_SYSTEMS) {
+      assert.ok(s.responsibilities.length > 0, `${s.id}: no responsibilities`);
+      assert.ok(s.ownedEntities.length > 0, `${s.id}: no owned entities`);
+      assert.ok(s.complianceHotspots.length > 0, `${s.id}: no compliance hotspots`);
+    }
   });
 });

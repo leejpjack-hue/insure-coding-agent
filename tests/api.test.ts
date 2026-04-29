@@ -56,11 +56,11 @@ describe('API Endpoints', () => {
     assert.equal(d.version, '0.1.0');
   });
 
-  it('GET /api/tools should list 11 tools', async () => {
+  it('GET /api/tools should list 10 tools', async () => {
     const { status, data } = await fetchJSON('GET', '/api/tools');
     assert.equal(status, 200);
     const tools = data as Array<{ name: string }>;
-    assert.equal(tools.length, 11);
+    assert.equal(tools.length, 10);
     const names = tools.map(t => t.name);
     assert.ok(names.includes('file_read'));
     assert.ok(names.includes('commission_validator'));

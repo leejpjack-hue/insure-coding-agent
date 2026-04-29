@@ -47,7 +47,7 @@ export class SafetyManager {
 
   constructor(limits?: Partial<SafetyLimits>) {
     this.autoApproveTools = new Set([
-      'file_read', 'code_search', 'git', 'schema_reader', 'api_tester',
+      'file_read', 'code_search', 'schema_reader', 'api_tester',
     ]);
     this.needConfirmationTools = new Set([
       'file_write', 'file_edit', 'bash_execute', 'commission_validator', 'license_checker',
@@ -183,7 +183,7 @@ export class SafetyManager {
 
   reset(): void {
     this.autoApproveTools = new Set([
-      'file_read', 'code_search', 'git', 'schema_reader', 'api_tester',
+      'file_read', 'code_search', 'schema_reader', 'api_tester',
     ]);
     this.needConfirmationTools = new Set([
       'file_write', 'file_edit', 'bash_execute', 'commission_validator', 'license_checker',

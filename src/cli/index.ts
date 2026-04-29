@@ -7,7 +7,6 @@ import { Orchestrator } from '../core/orchestrator.js';
 import { ToolRegistry } from '../core/tool-registry.js';
 import { createFileTools } from '../tools/file-tools.js';
 import { createBashTool } from '../tools/bash-tool.js';
-import { createGitTool } from '../tools/git-tool.js';
 import { createCommissionTool } from '../tools/commission-validator.js';
 import { createLicenseChecker } from '../tools/license-checker.js';
 import { createSchemaReader } from '../tools/schema-reader.js';
@@ -46,7 +45,6 @@ function setupRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
   createFileTools(registry);
   createBashTool(registry);
-  createGitTool(registry);
   createCommissionTool(registry);
   createLicenseChecker(registry);
   createSchemaReader(registry);
