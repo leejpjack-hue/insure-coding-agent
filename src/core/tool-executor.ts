@@ -1,4 +1,5 @@
 import { ToolResult, ToolCall } from './types.js';
+import path from 'path';
 import { ToolRegistry } from './tool-registry.js';
 import { CheckpointManager } from './checkpoint.js';
 import { eventBus } from './events.js';
@@ -28,7 +29,7 @@ export class ToolExecutor {
     this.registry = opts.registry;
     this.checkpointManager = opts.checkpointManager;
     this.sessionId = opts.sessionId;
-    this.projectRoot = opts.projectRoot;
+    this.projectRoot = path.resolve(opts.projectRoot);
     this.requireConfirmation = opts.requireConfirmation;
   }
 
@@ -58,7 +59,13 @@ export class ToolExecutor {
       };
     }
 
-    // 3. Safety check — dangerous commands
+    // 3. Sandbox — reject paths outside project root
+    const pathViolation = this.checkPathSandbox(toolCall);
+    if (pathViolation) {
+      return { callId, status: 'denied', content: pathViolation, duration: Date.now() - start };
+    }
+
+    // 4. Safety check — dangerous commands
     if (toolCall.name === 'bash_execute') {
       const cmd = String(toolCall.params.command || '');
       if (isDangerousCommand(cmd)) {
@@ -73,7 +80,7 @@ export class ToolExecutor {
       }
     }
 
-    // 4. Safety check — need_confirmation level
+    // 5. Safety check — need_confirmation level
     if (tool.definition.safetyLevel === 'need_confirmation' && this.requireConfirmation) {
       const approved = await this.requireConfirmation(toolCall.name, toolCall.params);
       if (!approved) {
@@ -81,7 +88,7 @@ export class ToolExecutor {
       }
     }
 
-    // 5. Save checkpoint before execution
+    // 6. Save checkpoint before execution
     const filesToSnapshot = extractFilePaths(toolCall);
     if (filesToSnapshot.length > 0) {
       this.checkpointManager.createCheckpoint(
@@ -93,7 +100,7 @@ export class ToolExecutor {
       );
     }
 
-    // 6. Execute
+    // 7. Execute
     try {
       const timeout = typeof toolCall.params.timeout === 'number' ? toolCall.params.timeout : 30000;
       const result = await withTimeout(tool.execute(toolCall.params), timeout);
@@ -122,11 +129,46 @@ export class ToolExecutor {
       return toolResult;
     }
   }
+
+  /** Reject file/bash operations that target paths outside the project root.
+   *  Also normalises relative paths to absolute paths rooted at projectRoot. */
+  private checkPathSandbox(toolCall: ToolCall): string | null {
+    const root = this.projectRoot;
+
+    // File tools: validate and normalise path parameters
+    const filePaths = ['path', 'filePath', 'dir'] as const;
+    for (const key of filePaths) {
+      const raw = toolCall.params[key];
+      if (typeof raw === 'string' && raw.length > 0) {
+        const resolved = path.resolve(root, raw);
+        if (!isInside(resolved, root)) {
+          return `Access denied: path "${raw}" resolves to "${resolved}", which is outside the project root "${root}".`;
+        }
+        // Normalise so the tool receives an absolute path within projectRoot
+        toolCall.params[key] = resolved;
+      }
+    }
+
+    // Bash: validate cwd parameter
+    if (toolCall.name === 'bash_execute' && typeof toolCall.params.cwd === 'string') {
+      const resolved = path.resolve(toolCall.params.cwd);
+      if (!isInside(resolved, root)) {
+        return `Access denied: cwd "${toolCall.params.cwd}" is outside the project root "${root}".`;
+      }
+    }
+
+    return null;
+  }
 }
 
 function isDangerousCommand(cmd: string): boolean {
   const lower = cmd.toLowerCase().trim();
   return DANGEROUS_COMMANDS.some(d => lower.includes(d));
+}
+
+function isInside(target: string, root: string): boolean {
+  const rel = path.relative(root, target);
+  return !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
 export function maskPII(text: string): string {
