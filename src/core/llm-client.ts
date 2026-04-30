@@ -46,7 +46,10 @@ export class LLMClient {
     ['openai', 'https://api.openai.com/v1/chat/completions'],
     ['google', 'https://generativelanguage.googleapis.com/v1beta'],
     ['deepseek', 'https://api.deepseek.com/v1/chat/completions'],
-    ['zhipu', 'https://open.bigmodel.cn/api/coding/paas/v4/chat/completions'],
+    // Z.AI Coding endpoint (international). Uses straight Bearer auth — the
+    // BigModel JWT-signing flow does NOT apply here. The /coding/paas/v4 path
+    // is OpenAI-compatible (chat/completions, tools, streaming).
+    ['zhipu', 'https://api.z.ai/api/coding/paas/v4/chat/completions'],
     ['copilot', 'https://api.githubcopilot.com/chat/completions'],
   ]);
 
@@ -185,9 +188,12 @@ export class LLMClient {
       };
     }
     if (provider === 'zhipu') {
+      // Z.AI Coding (api.z.ai): straight Bearer auth, no JWT signing.
+      // (The legacy BigModel endpoint at open.bigmodel.cn required HMAC-signed
+      // JWTs built from id.secret pairs; api.z.ai accepts the raw key.)
       return {
         'content-type': 'application/json',
-        'authorization': `Bearer ${this.generateZhipuToken(apiKey)}`,
+        'authorization': `Bearer ${apiKey}`,
       };
     }
     if (provider === 'copilot') {
