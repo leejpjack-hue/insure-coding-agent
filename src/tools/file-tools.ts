@@ -56,23 +56,27 @@ export function createFileTools(registry: ToolRegistry): void {
     },
   });
 
-  // file_write
+  // file_write — always creates missing parent directories, matching the
+  // universal coding-agent convention. Pass createDirs: false explicitly
+  // if you need to fail when the parent is missing.
   registry.register({
     definition: {
       name: 'file_write',
-      description: 'Write content to file, creating directories if needed',
+      description: 'Write content to a file. Parent directories are created automatically. Overwrites any existing file at the path.',
       safetyLevel: 'need_confirmation' as SafetyLevel,
       params: [
-        { name: 'path', type: 'string', required: true, description: 'File path relative to project root' },
+        { name: 'path', type: 'string', required: true, description: 'File path (relative resolves against current working directory)' },
         { name: 'content', type: 'string', required: true, description: 'Content to write' },
-        { name: 'createDirs', type: 'boolean', required: false, description: 'Create parent directories' },
+        { name: 'createDirs', type: 'boolean', required: false, description: 'Create parent directories if missing (default true)' },
       ],
     },
     execute: async (params) => {
       const p = params as unknown as FileWriteParams;
       const fullPath = path.resolve(p.path);
-      if (p.createDirs) {
-        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      const parentDir = path.dirname(fullPath);
+      const createDirs = p.createDirs !== false;
+      if (createDirs && !fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
       }
       fs.writeFileSync(fullPath, p.content, 'utf-8');
       return `Written ${p.content.length} bytes to ${p.path}`;
