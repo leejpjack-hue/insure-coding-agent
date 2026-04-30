@@ -127,7 +127,8 @@ class InteractiveChat {
         this.rl.prompt();
         return;
       }
-      if (input === '/steps') {
+      // /steps and /step (alias) — list every numbered tool call so far
+      if (input === '/steps' || input === '/step') {
         this.printSteps();
         this.rl.prompt();
         return;
@@ -149,6 +150,26 @@ class InteractiveChat {
       }
       if (input === '/model') {
         process.stdout.write(`${GRAY}Current model:${RESET} ${BOLD}${this.modelConfig.model}${RESET} ${GRAY}(${this.modelConfig.provider})${RESET}\n`);
+        this.rl.prompt();
+        return;
+      }
+      if (input === '/cancel') {
+        if (this.isRunning) {
+          this.isRunning = false;
+          this.stopSpinner();
+          process.stdout.write(`${YELLOW}Cancelled.${RESET}\n`);
+        } else {
+          process.stdout.write(`${GRAY}Nothing to cancel.${RESET}\n`);
+        }
+        this.rl.prompt();
+        return;
+      }
+
+      // Unknown slash command — do NOT forward to the LLM. The model gets
+      // confused by stray "/foo" tokens and goes into a re-read loop.
+      if (input.startsWith('/')) {
+        process.stdout.write(`${YELLOW}Unknown command: ${RESET}${BOLD}${input}${RESET}\n`);
+        process.stdout.write(`${GRAY}Type ${RESET}${CYAN}/help${RESET}${GRAY} for the list of valid commands.${RESET}\n`);
         this.rl.prompt();
         return;
       }
@@ -185,10 +206,11 @@ class InteractiveChat {
     process.stdout.write(`\n${BOLD}Commands${RESET}\n`);
     process.stdout.write(`  ${CYAN}/help${RESET}        Show this help\n`);
     process.stdout.write(`  ${CYAN}/clear${RESET}       Reset the session and step history\n`);
-    process.stdout.write(`  ${CYAN}/steps${RESET}       List all tool-call steps in this session\n`);
+    process.stdout.write(`  ${CYAN}/steps${RESET}       List all tool-call steps in this session ${GRAY}(alias: /step)${RESET}\n`);
     process.stdout.write(`  ${CYAN}/show N${RESET}      Expand step N (full output)\n`);
     process.stdout.write(`  ${CYAN}/last${RESET}        Expand the most recent step\n`);
     process.stdout.write(`  ${CYAN}/model${RESET}       Show current model/provider\n`);
+    process.stdout.write(`  ${CYAN}/cancel${RESET}      Cancel the running task ${GRAY}(also Ctrl+C)${RESET}\n`);
     process.stdout.write(`  ${CYAN}exit${RESET}         Quit\n\n`);
   }
 
