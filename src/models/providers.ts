@@ -16,6 +16,7 @@ export const PROVIDERS: ProviderInfo[] = [
   {
     name: 'openai',
     models: [
+      { provider: 'openai', model: 'gpt-4o', costPer1kInput: 0.0025, costPer1kOutput: 0.01 },
       { provider: 'openai', model: 'gpt-4o-mini', costPer1kInput: 0.00015, costPer1kOutput: 0.0006 },
     ],
   },
@@ -38,15 +39,18 @@ export const PROVIDERS: ProviderInfo[] = [
     ],
   },
   {
-    // GitHub Copilot (OAuth device flow). Cost is paid per Copilot subscription,
-    // not per-token; 0/0 here so cost calculations don't mislead.
     name: 'copilot',
     models: [
+      { provider: 'copilot', model: 'gpt-5.5', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'gpt-5.4', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'gpt-5.2-codex', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'gpt-5-mini', costPer1kInput: 0, costPer1kOutput: 0 },
       { provider: 'copilot', model: 'gpt-4.1', costPer1kInput: 0, costPer1kOutput: 0 },
-      { provider: 'copilot', model: 'claude-sonnet-4', costPer1kInput: 0, costPer1kOutput: 0 },
-      { provider: 'copilot', model: 'claude-opus-4', thinking: true, costPer1kInput: 0, costPer1kOutput: 0 },
-      { provider: 'copilot', model: 'gemini-2.5-pro', costPer1kInput: 0, costPer1kOutput: 0 },
-      { provider: 'copilot', model: 'o4-mini', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'gpt-4o', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'claude-opus-4.7', thinking: true, costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'claude-sonnet-4.6', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'claude-haiku-4.5', costPer1kInput: 0, costPer1kOutput: 0 },
+      { provider: 'copilot', model: 'gemini-3.1-pro-preview', costPer1kInput: 0, costPer1kOutput: 0 },
     ],
   },
 ];

@@ -62,7 +62,7 @@ export function createFileTools(registry: ToolRegistry): void {
   registry.register({
     definition: {
       name: 'file_write',
-      description: 'Write content to a file. Parent directories are created automatically. Overwrites any existing file at the path.',
+      description: 'Create a new file with the given content. Only use this for NEW files. For editing existing files, prefer file_edit which shows a precise diff. Overwrites any existing file at the path.',
       safetyLevel: 'need_confirmation' as SafetyLevel,
       params: [
         { name: 'path', type: 'string', required: true, description: 'File path (relative resolves against current working directory)' },
@@ -87,7 +87,7 @@ export function createFileTools(registry: ToolRegistry): void {
   registry.register({
     definition: {
       name: 'file_edit',
-      description: 'Edit file by replacing old content with new content',
+      description: 'Edit an existing file by finding and replacing a specific block of text. PREFERRED over file_write for modifications — always read the file first with file_read, then use file_edit to change only what needs changing. The oldContent must match exactly one location in the file.',
       safetyLevel: 'need_confirmation' as SafetyLevel,
       params: [
         { name: 'path', type: 'string', required: true, description: 'File path' },

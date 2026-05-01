@@ -13,5 +13,4 @@ export { AgentLoop } from './core/agent-loop.js';
 export { Orchestrator } from './core/orchestrator.js';
 export { createFileTools } from './tools/file-tools.js';
 export { createBashTool } from './tools/bash-tool.js';
-export { createGitTool } from './tools/git-tool.js';
 export * from './core/types.js';

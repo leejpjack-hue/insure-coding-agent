@@ -16,6 +16,10 @@ import { createApiTester } from '../tools/api-tester.js';
 import { createComplianceChecker } from '../tools/compliance-checker.js';
 import { ModelConfig } from '../core/types.js';
 import { MarkdownRenderer } from './markdown.js';
+import { readFileSafe, showFileDiff } from './diff.js';
+import { PROVIDERS } from '../models/providers.js';
+import fs from 'fs';
+import path from 'path';
 
 // ANSI escape codes
 const RESET = '\x1b[0m';
@@ -88,6 +92,9 @@ class InteractiveChat {
   private inThinking = false;
   private inAssistantText = false;
 
+  // file diff tracking — capture before content for diff display
+  private fileBeforeContent: Map<string, string> = new Map();
+
   constructor(private config: ReturnType<typeof loadConfig>) {
     this.rl = readline.createInterface({
       input: process.stdin,
@@ -148,8 +155,22 @@ class InteractiveChat {
         this.rl.prompt();
         return;
       }
-      if (input === '/model') {
-        process.stdout.write(`${GRAY}Current model:${RESET} ${BOLD}${this.modelConfig.model}${RESET} ${GRAY}(${this.modelConfig.provider})${RESET}\n`);
+      // /model [provider/model] — show or switch the active model
+      const modelMatch = input.match(/^\/model(?:\s+(\S+)\/(\S+))?$/);
+      if (modelMatch) {
+        if (modelMatch[1] && modelMatch[2]) {
+          this.modelConfig = {
+            ...this.modelConfig,
+            provider: modelMatch[1] as any,
+            model: modelMatch[2],
+            apiKey: undefined,  // will be resolved by LLMClient at call time
+          };
+          this.persistModelChoice(modelMatch[1], modelMatch[2]);
+          process.stdout.write(`${GREEN}✓${RESET} Switched to ${BOLD}${this.modelConfig.model}${RESET} ${GRAY}(${this.modelConfig.provider})${RESET} ${DIM}(saved as default)${RESET}\n`);
+        } else {
+          process.stdout.write(`${GRAY}Current model:${RESET} ${BOLD}${this.modelConfig.model}${RESET} ${GRAY}(${this.modelConfig.provider})${RESET}\n`);
+          process.stdout.write(`${GRAY}Usage: /model <provider>/<model>  (e.g. /model zhipu/glm-5.1)${RESET}\n`);
+        }
         this.rl.prompt();
         return;
       }
@@ -162,6 +183,27 @@ class InteractiveChat {
           process.stdout.write(`${GRAY}Nothing to cancel.${RESET}\n`);
         }
         this.rl.prompt();
+        return;
+      }
+
+      // /resume [id] — continue a previous session (default: most recent)
+      const resumeMatch = input.match(/^\/resume(?:\s+(\S+))?$/);
+      if (resumeMatch) {
+        this.resumeSession(resumeMatch[1] || null);
+        this.rl.prompt();
+        return;
+      }
+
+      // /sessions — list saved sessions
+      if (input === '/sessions') {
+        this.listSessions();
+        this.rl.prompt();
+        return;
+      }
+
+      // /models — list available models (live from provider API)
+      if (input === '/models') {
+        this.pendingTask = this.listModels().then(() => { this.pendingTask = null; this.rl.prompt(); });
         return;
       }
 
@@ -206,10 +248,13 @@ class InteractiveChat {
     process.stdout.write(`\n${BOLD}Commands${RESET}\n`);
     process.stdout.write(`  ${CYAN}/help${RESET}        Show this help\n`);
     process.stdout.write(`  ${CYAN}/clear${RESET}       Reset the session and step history\n`);
+    process.stdout.write(`  ${CYAN}/sessions${RESET}    List saved sessions\n`);
+    process.stdout.write(`  ${CYAN}/resume${RESET}      Resume the most recent session ${GRAY}(or: /resume <id>)${RESET}\n`);
     process.stdout.write(`  ${CYAN}/steps${RESET}       List all tool-call steps in this session ${GRAY}(alias: /step)${RESET}\n`);
     process.stdout.write(`  ${CYAN}/show N${RESET}      Expand step N (full output)\n`);
     process.stdout.write(`  ${CYAN}/last${RESET}        Expand the most recent step\n`);
-    process.stdout.write(`  ${CYAN}/model${RESET}       Show current model/provider\n`);
+    process.stdout.write(`  ${CYAN}/model${RESET}       Show or switch model ${GRAY}(/model zhipu/glm-5.1)${RESET}\n`);
+    process.stdout.write(`  ${CYAN}/models${RESET}      List available models (live from provider)${RESET}\n`);
     process.stdout.write(`  ${CYAN}/cancel${RESET}      Cancel the running task ${GRAY}(also Ctrl+C)${RESET}\n`);
     process.stdout.write(`  ${CYAN}exit${RESET}         Quit\n\n`);
   }
@@ -238,6 +283,193 @@ class InteractiveChat {
     process.stdout.write(step.fullContent || `${GRAY}(empty)${RESET}`);
     if (!step.fullContent.endsWith('\n')) process.stdout.write('\n');
     process.stdout.write(`${GRAY}${'─'.repeat(60)}${RESET}\n\n`);
+  }
+
+  private listSessions(): void {
+    const sessions = this.sessionManager.listSessions();
+    if (sessions.length === 0) {
+      process.stdout.write(`${GRAY}No sessions found.${RESET}\n`);
+      return;
+    }
+    process.stdout.write(`\n${BOLD}Sessions (${sessions.length})${RESET}\n`);
+    for (const s of sessions.slice(0, 20)) {
+      const time = new Date(s.updatedAt).toLocaleString();
+      const msgs = this.sessionManager.getHistory(s.id).length;
+      const active = s.id === this.sessionId ? ` ${GREEN}(current)${RESET}` : '';
+      process.stdout.write(`  ${GRAY}${s.id}${RESET} ${GRAY}${time}${RESET} ${GRAY}${msgs} msg(s)${RESET}${active}\n`);
+    }
+    process.stdout.write(`\n${GRAY}Use ${RESET}${CYAN}/resume <id>${RESET}${GRAY} to continue a session.${RESET}\n\n`);
+  }
+
+  private resumeSession(sessionId: string | null): void {
+    if (!sessionId) {
+      // Find the most recent session that isn't the current one
+      const sessions = this.sessionManager.listSessions();
+      const other = sessions.find(s => s.id !== this.sessionId);
+      if (!other) {
+        process.stdout.write(`${GRAY}No previous sessions to resume.${RESET}\n`);
+        return;
+      }
+      sessionId = other.id;
+    }
+
+    const session = this.sessionManager.getSession(sessionId);
+    if (!session) {
+      process.stdout.write(`${RED}Session not found: ${sessionId}${RESET}\n`);
+      return;
+    }
+
+    this.sessionManager.resumeSession(sessionId);
+    this.sessionId = sessionId;
+    this.steps = [];
+
+    const history = this.sessionManager.getHistory(sessionId);
+    const userMsgs = history.filter(m => m.role === 'user');
+    const toolMsgs = history.filter(m => m.role === 'tool');
+    const time = new Date(session.updatedAt).toLocaleString();
+
+    process.stdout.write(`${GREEN}✓${RESET} Resumed session ${GRAY}${sessionId}${RESET}\n`);
+    process.stdout.write(`  ${GRAY}Last active: ${time}${RESET}\n`);
+    process.stdout.write(`  ${GRAY}${userMsgs.length} user message(s), ${toolMsgs.length} tool call(s)${RESET}\n`);
+
+    // Show a compact summary of the last few exchanges
+    if (userMsgs.length > 0) {
+      process.stdout.write(`\n${DIM}Recent messages:${RESET}\n`);
+      const recent = userMsgs.slice(-3);
+      for (const m of recent) {
+        const preview = truncate(m.content, 80);
+        process.stdout.write(`  ${GRAY}→${RESET} ${preview}${RESET}\n`);
+      }
+    }
+    process.stdout.write('\n');
+  }
+
+  /** Fetch and display available models from the current provider's API. */
+  private async listModels(): Promise<void> {
+    const provider = this.modelConfig.provider;
+    const currentModel = this.modelConfig.model;
+
+    // Show static list first
+    const staticModels = PROVIDERS.find(p => p.name === provider)?.models ?? [];
+    if (staticModels.length > 0) {
+      process.stdout.write(`\n${BOLD}Known models for ${provider}:${RESET}\n`);
+      for (const m of staticModels) {
+        const marker = m.model === currentModel ? ` ${GREEN}(active)${RESET}` : '';
+        process.stdout.write(`  ${CYAN}${m.model}${RESET}${marker}\n`);
+      }
+    }
+
+    // Live fetch from provider
+    process.stdout.write(`\n${GRAY}Fetching live models from ${provider}...${RESET}\n`);
+    try {
+      const models = await this.fetchLiveModels(provider);
+      if (models.length > 0) {
+        process.stdout.write(`\n${BOLD}Live models (${models.length}):${RESET}\n`);
+        for (const m of models) {
+          const marker = m.id === currentModel ? ` ${GREEN}(active)${RESET}` : '';
+          const enabled = m.enabled ? '' : ` ${DIM}(hidden)${RESET}`;
+          process.stdout.write(`  ${CYAN}${m.id}${RESET}${marker}${enabled}\n`);
+        }
+      } else {
+        process.stdout.write(`${GRAY}No models returned.${RESET}\n`);
+      }
+    } catch (err) {
+      process.stdout.write(`${YELLOW}Could not fetch: ${(err as Error).message}${RESET}\n`);
+      process.stdout.write(`${GRAY}Use the known models listed above.${RESET}\n`);
+    }
+
+    process.stdout.write(`\n${GRAY}Switch with: ${RESET}${CYAN}/model ${provider}/<model>${RESET}\n\n`);
+  }
+
+  private async fetchLiveModels(provider: string): Promise<Array<{ id: string; enabled: boolean }>> {
+    // GitHub Copilot — use /models endpoint
+    if (provider === 'copilot') {
+      const { getCopilotToken } = await import('../core/copilot-auth.js');
+      const token = await getCopilotToken();
+      const r = await fetch('https://api.githubcopilot.com/models', {
+        headers: {
+          'authorization': `Bearer ${token}`,
+          'editor-version': 'vscode/1.95.0',
+          'editor-plugin-version': 'copilot-chat/0.22.0',
+          'copilot-integration-id': 'vscode-chat',
+          'user-agent': 'GitHubCopilotChat/0.22.0',
+          'openai-intent': 'conversation-panel',
+        },
+      });
+      if (!r.ok) throw new Error(`${r.status}`);
+      const data = await r.json() as { data: Array<{ id: string; model_picker_enabled?: boolean }> };
+      return (data.data || []).map(m => ({ id: m.id, enabled: !!m.model_picker_enabled }));
+    }
+
+    // OpenAI-compatible providers — use /v1/models
+    const endpoints: Record<string, string> = {
+      openai: 'https://api.openai.com/v1/models',
+      deepseek: 'https://api.deepseek.com/v1/models',
+      zhipu: 'https://api.z.ai/api/coding/paas/v4/models',
+    };
+
+    const url = this.modelConfig.baseUrl
+      ? this.modelConfig.baseUrl.replace(/\/chat\/completions.*$/, '/models')
+      : endpoints[provider];
+
+    if (!url) {
+      // Anthropic / Google — no public /models endpoint
+      return PROVIDERS.find(p => p.name === provider)?.models.map(m => ({ id: m.model, enabled: true })) ?? [];
+    }
+
+    const apiKey = await this.resolveApiKey(provider);
+    const r = await fetch(url, {
+      headers: {
+        'authorization': `Bearer ${apiKey}`,
+        'content-type': 'application/json',
+      },
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+    const data = await r.json() as { data: Array<{ id: string }> };
+    return (data.data || []).map(m => ({ id: m.id, enabled: true }));
+  }
+
+  private async resolveApiKey(provider: string): Promise<string> {
+    if (this.modelConfig.apiKey) return this.modelConfig.apiKey;
+    if (provider === 'copilot') {
+      const { getCopilotToken } = await import('../core/copilot-auth.js');
+      return getCopilotToken();
+    }
+    const env = process.env[`${provider.toUpperCase()}_API_KEY`];
+    if (!env) throw new Error(`No API key for ${provider}`);
+    return env;
+  }
+
+  /** Write DEFAULT_MODEL_PROVIDER and DEFAULT_MODEL to .env so the choice persists. */
+  private persistModelChoice(provider: string, model: string): void {
+    try {
+      const envPath = path.join(process.cwd(), '.env');
+      let content = '';
+      if (fs.existsSync(envPath)) {
+        content = fs.readFileSync(envPath, 'utf-8');
+      }
+
+      const providerLine = `DEFAULT_MODEL_PROVIDER=${provider}`;
+      const modelLine = `DEFAULT_MODEL=${model}`;
+
+      // Replace existing (commented or uncommented) lines, or append
+      let updated = content;
+      if (/^#?\s*DEFAULT_MODEL_PROVIDER=.*$/m.test(updated)) {
+        updated = updated.replace(/^#?\s*DEFAULT_MODEL_PROVIDER=.*$/m, providerLine);
+      } else {
+        updated += `\n${providerLine}`;
+      }
+
+      if (/^#?\s*DEFAULT_MODEL=.*$/m.test(updated)) {
+        updated = updated.replace(/^#?\s*DEFAULT_MODEL=.*$/m, modelLine);
+      } else {
+        updated += `\n${modelLine}`;
+      }
+
+      fs.writeFileSync(envPath, updated, 'utf-8');
+    } catch {
+      // Non-critical — the switch still works for this session
+    }
   }
 
   private async handleInput(input: string): Promise<void> {
@@ -335,6 +567,13 @@ class InteractiveChat {
           fullContent: '',
           startedAt: Date.now(),
         };
+        // Capture file content before file_write/file_edit executes
+        if (event.name === 'file_write' || event.name === 'file_edit') {
+          const filePath = String(params.path || params.filePath || '');
+          if (filePath) {
+            this.fileBeforeContent.set(filePath, readFileSafe(filePath));
+          }
+        }
         process.stdout.write(`\n${CYAN}${BOLD}▸${RESET} ${BOLD}#${stepNum}${RESET} ${CYAN}${event.name}${RESET}${GRAY}${paramStr}${RESET}\n`);
         this.startSpinner(`  Running ${event.name}`);
         break;
@@ -343,6 +582,7 @@ class InteractiveChat {
       case 'tool_result': {
         this.stopSpinner();
         const icon = event.status === 'success' ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
+        const toolName = event.name;
         if (this.currentStep) {
           this.currentStep.status = event.status;
           this.currentStep.duration = event.duration;
@@ -369,6 +609,21 @@ class InteractiveChat {
         } else {
           process.stdout.write('\n');
         }
+
+        // Show colored diff for file changes
+        if (event.status === 'success' && (toolName === 'file_write' || toolName === 'file_edit')) {
+          const filePath = String(this.currentStep?.params?.path || this.currentStep?.params?.filePath || '');
+          if (filePath) {
+            const before = this.fileBeforeContent.get(filePath) ?? '';
+            const after = readFileSafe(filePath);
+            const diffOutput = showFileDiff(before, after, filePath);
+            if (diffOutput) {
+              process.stdout.write(`\n${diffOutput}\n`);
+            }
+            this.fileBeforeContent.delete(filePath);
+          }
+        }
+
         this.currentStep = null;
         break;
       }

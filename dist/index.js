@@ -16,6 +16,5 @@ export { Orchestrator } from './core/orchestrator.js';
 // Tools
 export { createFileTools } from './tools/file-tools.js';
 export { createBashTool } from './tools/bash-tool.js';
-export { createGitTool } from './tools/git-tool.js';
 // Types
 export * from './core/types.js';

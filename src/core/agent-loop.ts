@@ -576,11 +576,22 @@ export class AgentLoop {
         parameters: {
           type: 'object' as const,
           properties: Object.fromEntries(
-            def.params.map(p => [p.name, {
-              type: p.type,
-              description: p.description,
-              ...(p.default !== undefined ? { default: p.default } : {}),
-            }])
+            def.params.map(p => {
+              const schema: Record<string, unknown> = {
+                type: p.type,
+                description: p.description,
+              };
+              if (p.type === 'array') {
+                schema.items = { type: 'string' };
+              }
+              if (p.type === 'object') {
+                schema.properties = {};
+              }
+              if (p.default !== undefined) {
+                schema.default = p.default;
+              }
+              return [p.name, schema];
+            })
           ),
           required: def.params.filter(p => p.required).map(p => p.name),
         },
