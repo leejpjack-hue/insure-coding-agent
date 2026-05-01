@@ -1,6 +1,7 @@
 import { Message, ModelConfig, ToolDefinition } from './types.js';
 import { ToolRegistry } from './tool-registry.js';
 import { LSPClient } from './lsp-client.js';
+import { getKnowledgeBase, KBHit } from '../knowledge/knowledge-base.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -12,6 +13,8 @@ export interface ContextOptions {
   registry: ToolRegistry;
   lspClient?: LSPClient;
   amsContext?: string;
+  /** Disable automatic KB retrieval (e.g. for tests). */
+  skipKnowledgeRetrieval?: boolean;
 }
 
 export class ContextAssembler {
@@ -22,6 +25,10 @@ export class ContextAssembler {
     sections.push(this.buildProjectContext(opts.projectRoot));
     sections.push(this.buildAgentMd(opts.projectRoot));
     sections.push(this.buildToolList(opts.registry));
+    if (!opts.skipKnowledgeRetrieval) {
+      const kb = this.buildKnowledgeBaseHits(opts.task, opts.history);
+      if (kb) sections.push(kb);
+    }
     sections.push(this.buildConversationHistory(opts.history));
     sections.push(this.buildCurrentTask(opts.task));
 
@@ -34,6 +41,62 @@ export class ContextAssembler {
     }
 
     return sections.join('\n\n');
+  }
+
+  /**
+   * Auto-retrieve the most relevant entries from the AMS knowledge base for
+   * the current task. This is the "think like a domain expert" lever — without
+   * it the model only knows what the static system prompt mentions; with it,
+   * the model has structured reference material on AS400 quirks, AMS
+   * compliance hot-spots, AML rules, etc., right when it's planning.
+   *
+   * Query is the current task plus the last user turn (catches follow-ups
+   * like "now do the same for renewals" that don't repeat the topic).
+   */
+  private buildKnowledgeBaseHits(task: string, history: Message[]): string {
+    const lastUser = [...history].reverse().find(m => m.role === 'user');
+    const query = `${task}\n${lastUser?.content ?? ''}`.trim();
+    if (!query) return '';
+
+    let hits: KBHit[];
+    try {
+      hits = getKnowledgeBase().search(query, 5);
+    } catch {
+      return '';   // KB initialisation problems shouldn't kill the agent
+    }
+    if (hits.length === 0) return '';
+
+    const lines = hits.map((h) => this.renderHit(h));
+    return `## Relevant Domain Knowledge (auto-retrieved)\n` +
+      `_The following entries from the AMS knowledge base look most relevant to this task. ` +
+      `Use them when designing — they encode domain rules and compliance hot-spots that are easy to forget._\n\n` +
+      lines.join('\n\n');
+  }
+
+  private renderHit(hit: KBHit): string {
+    switch (hit.kind) {
+      case 'system':
+        return `### [System] ${hit.entry.name} (${hit.entry.id})\n` +
+          `${hit.entry.summary}\n` +
+          `- **Owns:** ${hit.entry.ownedEntities.slice(0, 6).join(', ')}\n` +
+          `- **Integrates with:** ${hit.entry.integratesWith.slice(0, 6).join(', ')}\n` +
+          `- **Compliance hot-spots:** ${hit.entry.complianceHotspots.slice(0, 3).join('; ')}\n` +
+          `- **Agent caveats:** ${hit.entry.agentNotes.slice(0, 2).join('; ')}`;
+      case 'knowledge':
+        return `### [Knowledge] ${hit.entry.topic}\n${hit.entry.content}`;
+      case 'compliance':
+        return `### [Compliance] ${hit.rule.title} — ${hit.rule.reference} (${hit.rule.jurisdiction})\n` +
+          `${hit.rule.description}\n→ ${hit.rule.recommendation}`;
+      case 'commission':
+        return `### [Commission disclosure] ${hit.rule.reference} (${hit.rule.jurisdiction})\n` +
+          `Applies to: ${hit.rule.appliesTo.join(', ')}; must disclose: ${hit.rule.mustDisclose.join(', ')}`;
+      case 'licensing':
+        return `### [Licensing] ${hit.rule.regulator} — ${hit.rule.reference} (${hit.rule.jurisdiction})\n` +
+          `Renewal cycle ${hit.rule.renewalCycleYears}y, CPD ${hit.rule.continuingEducation.annualHours}h/y.`;
+      case 'pii':
+        return `### [PII rule] ${hit.rule.type} (${hit.rule.severity}, ${hit.rule.jurisdictions.join('/')})\n` +
+          `${hit.rule.description} → ${hit.rule.remediation}`;
+    }
   }
 
   /** Load AGENT.MD from the project root (case-insensitive). */

@@ -4,7 +4,7 @@ import {
 import { ToolExecutor } from './tool-executor.js';
 import { ToolRegistry } from './tool-registry.js';
 import { ContextAssembler } from './context-assembler.js';
-import { LLMClient, LLMResponse, LLMStreamChunk, OpenAITool } from './llm-client.js';
+import { LLMClient, LLMResponse, LLMStreamChunk, OpenAITool, NetworkError, APIError, StopReason } from './llm-client.js';
 import { ThinkingLoop, ThinkingLoopOptions, ThinkingLoopState } from './thinking-loop.js';
 import { CheckpointManager } from './checkpoint.js';
 import { SessionManager } from './session.js';
@@ -148,16 +148,28 @@ export class AgentLoop {
         this.thinkingLoop.recordSuccess();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        this.thinkingLoop.recordFailure(message);
+        const isNetwork = err instanceof NetworkError;
         this.onEvent?.({ type: 'error', error: message });
 
         this.sessionManager.addMessage({
           sessionId: this.sessionId,
           role: 'assistant',
-          content: `[LLM Error — retrying] ${message}`,
+          content: isNetwork
+            ? `[Network error — exhausted retries] ${message}`
+            : `[LLM Error — retrying] ${message}`,
           timestamp: Date.now(),
         });
 
+        // Network failures don't indicate a problem with the prompt or model;
+        // callLLMWithRetry already exhausted its dedicated network budget.
+        // Fail the task immediately rather than confusing the consecutive-fails
+        // logic (which is meant for genuinely flaky model behaviour).
+        if (isNetwork) {
+          this.thinkingLoop.markFailed(`Network unreachable after retries: ${message}`);
+          break;
+        }
+
+        this.thinkingLoop.recordFailure(message);
         const loopState = this.thinkingLoop.getState();
         if (loopState.consecutiveFails >= (this.thinkingLoop as unknown as { options: ThinkingLoopOptions }).options.maxConsecutiveFails) {
           this.thinkingLoop.markFailed(`Max consecutive LLM failures reached: ${message}`);
@@ -171,13 +183,36 @@ export class AgentLoop {
 
       if (response.type === 'text') {
         this.onEvent?.({ type: 'text_end', content: response.content || '' });
+        // Persist the assistant text and look for explicit completion markers.
         const handled = this.handleTextResponse(response.content || '');
+
+        // 1. Provider gave us a definitive stop signal — trust it.
+        if (response.stopReason === 'stop') {
+          this.thinkingLoop.markCompleted();
+          break;
+        }
+        // 2. Model says "[done]" / "task completed" etc. — also trust.
         if (handled === 'completed') {
           this.thinkingLoop.markCompleted();
           break;
         }
-        // Any substantial text response is treated as complete — the model
-        // would have called tools if it needed to do more work.
+        // 3. Provider truncated due to max_tokens — keep going so the model can
+        //    finish its thought; the next iteration carries the partial reply
+        //    as context.
+        if (response.stopReason === 'length') {
+          continue;
+        }
+        // 4. Provider exposed stopReason but it's not 'stop' (e.g. 'unknown',
+        //    'content_filter') — treat substantial text as a final answer.
+        //    Without this, GLM-5.1 (which sometimes emits tool-call
+        //    *announcements* as content) would loop forever.
+        if (response.stopReason && response.stopReason !== 'unknown') {
+          // anything other than the explicit-stop / explicit-length cases
+          // already handled above falls through to the fallback heuristic.
+        }
+        // 5. Fallback heuristic for providers that don't expose stopReason
+        //    (or report 'unknown'): a reply over ~50 chars is almost always
+        //    final. After 3 iterations of empty/short text, give up.
         if ((response.content || '').length > 50) {
           this.thinkingLoop.markCompleted();
           break;
@@ -234,8 +269,13 @@ export class AgentLoop {
     history: Message[],
   ): Promise<LLMResponse> {
     let lastError: Error | undefined;
+    // Network failures are retried more aggressively (separate budget) than
+    // model/API errors, since they don't indicate a problem with the prompt.
+    const maxNetworkAttempts = Math.max(this.maxRetries, 5);
+    let networkAttempts = 0;
+    let modelAttempts = 0;
 
-    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+    while (networkAttempts < maxNetworkAttempts && modelAttempts < this.maxRetries) {
       try {
         const messages = history.map(m => ({
           role: m.role as string,
@@ -267,14 +307,30 @@ export class AgentLoop {
         return response;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
+        const isNetwork = err instanceof NetworkError;
+        const isRetryableApi = err instanceof APIError && err.isRetryable();
 
-        if (attempt < this.maxRetries - 1) {
-          const delay = Math.min(
-            BACKOFF_BASE_MS * Math.pow(2, attempt) + Math.random() * 1000,
-            BACKOFF_MAX_MS,
-          );
-          await new Promise<void>(resolve => setTimeout(resolve, delay));
+        // Permanent API errors (401, 403, 404) — bail immediately, don't burn retries
+        if (err instanceof APIError && !err.isRetryable()) {
+          throw err;
         }
+
+        if (isNetwork) {
+          networkAttempts++;
+          // Longer backoff for network: 2s, 4s, 8s, 16s, 30s
+          const delay = Math.min(2000 * Math.pow(2, networkAttempts - 1), BACKOFF_MAX_MS);
+          await new Promise<void>(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+
+        // Model error / retryable API error
+        modelAttempts++;
+        if (modelAttempts >= this.maxRetries) break;
+        const delay = Math.min(
+          BACKOFF_BASE_MS * Math.pow(2, modelAttempts - 1) + Math.random() * 1000,
+          BACKOFF_MAX_MS,
+        );
+        await new Promise<void>(resolve => setTimeout(resolve, delay));
       }
     }
 
@@ -289,6 +345,7 @@ export class AgentLoop {
     let content = '';
     const toolCalls: Array<{ id: string; name: string; arguments: string }> = [];
     let inThinking = false;
+    let streamStopReason: StopReason = 'unknown';
 
     const toolDefs = this.getToolDefinitions();
 
@@ -333,11 +390,15 @@ export class AgentLoop {
               this.onEvent?.({ type: 'thinking_end' });
               inThinking = false;
             }
+            streamStopReason = chunk.stopReason ?? 'unknown';
             break;
         }
       }
-    } catch {
-      // Stream failed, fall back to non-streaming
+    } catch (streamErr) {
+      // Don't swallow network errors — let the outer retry classify them.
+      if (streamErr instanceof NetworkError) throw streamErr;
+      // Stream failed mid-flight (partial JSON, unexpected EOF) — fall back to
+      // a non-streaming call so we still get a clean response shape.
       const response = await this.llmClient.chat({
         model: this.modelConfig,
         systemPrompt: context,
@@ -375,11 +436,15 @@ export class AgentLoop {
         reasoning,
         toolCall: built[0],
         toolCalls: built,
+        // Streaming providers report 'tool_calls' as the stop reason when the
+        // model decides to call tools — treat that as canonical even if the
+        // chunk happened to omit it.
+        stopReason: streamStopReason === 'unknown' ? 'tool_calls' : streamStopReason,
       };
     }
 
     this.onEvent?.({ type: 'text_end', content });
-    return { type: 'text', content, reasoning };
+    return { type: 'text', content, reasoning, stopReason: streamStopReason };
   }
 
   private handleTextResponse(content: string): 'completed' | 'continue' {

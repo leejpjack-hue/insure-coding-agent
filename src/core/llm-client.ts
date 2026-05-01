@@ -1,6 +1,15 @@
 import { createHmac } from 'node:crypto';
 import { ModelConfig, Message, ToolCall, ToolResult } from './types.js';
 
+/** Canonical stop reasons mapped from provider-specific finish_reason / stop_reason. */
+export type StopReason =
+  | 'stop'            // model decided it was done — clean exit
+  | 'tool_calls'      // model wants to call tools
+  | 'length'          // hit max_tokens — output was truncated
+  | 'content_filter'  // safety filter triggered
+  | 'error'           // provider reported an error mid-stream
+  | 'unknown';        // provider didn't expose this; caller should fall back to heuristics
+
 export interface LLMResponse {
   type: 'text' | 'tool_use' | 'follow_up';
   content?: string;
@@ -10,6 +19,37 @@ export interface LLMResponse {
   /** All tool calls returned in this turn. Empty when type !== 'tool_use'. */
   toolCalls?: ToolCall[];
   followUpQuestion?: string;
+  /** Provider's stop signal, normalised. Use this for stop-detection in the loop. */
+  stopReason?: StopReason;
+}
+
+/**
+ * Network-layer failure (DNS, connection refused, TLS handshake, socket timeout,
+ * etc.). The model never received the request. These should be retried with a
+ * separate budget — they don't indicate a problem with the prompt or the model.
+ */
+export class NetworkError extends Error {
+  readonly kind = 'network' as const;
+  constructor(message: string, readonly cause?: unknown) {
+    super(message);
+    this.name = 'NetworkError';
+  }
+}
+
+/**
+ * Provider returned a non-OK HTTP status. May be retryable (5xx, 429) or
+ * permanent (401, 403, 404). The model received the request but rejected it.
+ */
+export class APIError extends Error {
+  readonly kind = 'api' as const;
+  constructor(message: string, readonly status: number, readonly body?: string) {
+    super(message);
+    this.name = 'APIError';
+  }
+  /** Server-side or rate-limit failures that are worth retrying. */
+  isRetryable(): boolean {
+    return this.status >= 500 || this.status === 429;
+  }
 }
 
 export interface OpenAITool {
@@ -38,6 +78,8 @@ export interface LLMStreamChunk {
   type: 'reasoning' | 'content' | 'tool_call_start' | 'tool_call_delta' | 'done';
   text?: string;
   toolCall?: { id: string; name: string; argumentsDelta: string };
+  /** Populated on the final 'done' chunk when the provider tells us why it stopped. */
+  stopReason?: StopReason;
 }
 
 export class LLMClient {
@@ -74,15 +116,21 @@ export class LLMClient {
 
     const apiKey = await this.resolveApiKey(model);
 
-    const response = await fetch(baseUrl, {
-      method: 'POST',
-      headers: this.buildHeaders(model.provider, apiKey),
-      body: JSON.stringify(this.buildBody(opts)),
-    });
+    let response: Response;
+    try {
+      response = await fetch(baseUrl, {
+        method: 'POST',
+        headers: this.buildHeaders(model.provider, apiKey),
+        body: JSON.stringify(this.buildBody(opts)),
+      });
+    } catch (err) {
+      // fetch() threw before any HTTP response — DNS, TCP, TLS or abort.
+      throw new NetworkError(`Network error reaching ${baseUrl}: ${(err as Error).message}`, err);
+    }
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`LLM API error (${response.status}): ${text}`);
+      throw new APIError(`LLM API error (${response.status}): ${text}`, response.status, text);
     }
 
     const data = await response.json() as Record<string, unknown>;
@@ -102,15 +150,20 @@ export class LLMClient {
     body.stream = true;
     body.stream_options = { include_usage: true };
 
-    const response = await fetch(baseUrl, {
-      method: 'POST',
-      headers: this.buildHeaders(model.provider, apiKey),
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetch(baseUrl, {
+        method: 'POST',
+        headers: this.buildHeaders(model.provider, apiKey),
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      throw new NetworkError(`Network error reaching ${baseUrl}: ${(err as Error).message}`, err);
+    }
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`LLM API error (${response.status}): ${text}`);
+      throw new APIError(`LLM API error (${response.status}): ${text}`, response.status, text);
     }
 
     if (!response.body) {
@@ -121,6 +174,10 @@ export class LLMClient {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    // Captured from the *last* SSE chunk that carries finish_reason. Yielded
+    // on the closing { type: 'done' } so the caller can decide whether to
+    // continue, mark complete, or treat as truncation.
+    let stopReason: StopReason = 'unknown';
 
     try {
       while (true) {
@@ -136,12 +193,17 @@ export class LLMClient {
           if (!trimmed.startsWith('data: ')) continue;
           const data = trimmed.slice(6);
           if (data === '[DONE]') {
-            yield { type: 'done' };
+            yield { type: 'done', stopReason };
             return;
           }
           try {
             const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta;
+            const choice = parsed.choices?.[0];
+            // finish_reason arrives on the chunk *after* the last content/tool delta
+            if (choice?.finish_reason) {
+              stopReason = this.normaliseOpenAIStop(choice.finish_reason);
+            }
+            const delta = choice?.delta;
             if (!delta) continue;
 
             if (delta.reasoning_content) {
@@ -169,7 +231,7 @@ export class LLMClient {
       reader.releaseLock();
     }
 
-    yield { type: 'done' };
+    yield { type: 'done', stopReason };
   }
 
   private async *fallbackNonStream(opts: LLMClientOptions): AsyncGenerator<LLMStreamChunk> {
@@ -268,8 +330,9 @@ export class LLMClient {
   private parseResponse(provider: string, data: Record<string, unknown>): LLMResponse {
     if (provider === 'anthropic') {
       const content = data.content as Array<{ type: string; text?: string; name?: string; input?: Record<string, unknown> }>;
+      const stopReason = this.normaliseAnthropicStop(data.stop_reason as string | undefined);
       if (!content || content.length === 0) {
-        return { type: 'text', content: '(no response)' };
+        return { type: 'text', content: '(no response)', stopReason };
       }
 
       const toolUses = content.filter(c => c.type === 'tool_use');
@@ -283,19 +346,28 @@ export class LLMClient {
           type: 'tool_use',
           toolCall: toolCalls[0],
           toolCalls,
+          stopReason,
         };
       }
 
-      return { type: 'text', content: content.map(c => c.text || '').join('\n') };
+      return {
+        type: 'text',
+        content: content.map(c => c.text || '').join('\n'),
+        stopReason,
+      };
     }
 
     // OpenAI-compatible (OpenAI, DeepSeek, Google, Zhipu)
-    const choices = data.choices as Array<{ message: { content?: string; reasoning_content?: string; tool_calls?: Array<{ function: { name: string; arguments: string } }> } }>;
+    const choices = data.choices as Array<{
+      message: { content?: string; reasoning_content?: string; tool_calls?: Array<{ function: { name: string; arguments: string } }> };
+      finish_reason?: string;
+    }>;
     if (!choices || choices.length === 0) {
-      return { type: 'text', content: '(no response)' };
+      return { type: 'text', content: '(no response)', stopReason: 'unknown' };
     }
 
     const choice = choices[0];
+    const stopReason = this.normaliseOpenAIStop(choice.finish_reason);
     if (choice.message.tool_calls && choice.message.tool_calls.length > 0) {
       const toolCalls: ToolCall[] = choice.message.tool_calls.map((tc, i) => ({
         id: `tc_${Date.now()}_${i}`,
@@ -307,6 +379,7 @@ export class LLMClient {
         reasoning: choice.message.reasoning_content,
         toolCall: toolCalls[0],
         toolCalls,
+        stopReason,
       };
     }
 
@@ -314,7 +387,57 @@ export class LLMClient {
       type: 'text',
       reasoning: choice.message.reasoning_content,
       content: choice.message.content || '',
+      stopReason,
     };
+  }
+
+  /**
+   * Anthropic stop_reason → canonical:
+   *   end_turn       → stop          (model finished naturally)
+   *   tool_use       → tool_calls
+   *   max_tokens     → length        (output truncated; loop should continue)
+   *   stop_sequence  → stop
+   *   anything else  → unknown       (let caller fall back to heuristics)
+   */
+  private normaliseAnthropicStop(reason: string | undefined): StopReason {
+    switch (reason) {
+      case 'end_turn':
+      case 'stop_sequence':
+        return 'stop';
+      case 'tool_use':
+        return 'tool_calls';
+      case 'max_tokens':
+        return 'length';
+      case undefined:
+      case null:
+        return 'unknown';
+      default:
+        return 'unknown';
+    }
+  }
+
+  /**
+   * OpenAI-compatible finish_reason → canonical. Same family of reasons
+   * across OpenAI, DeepSeek, Google's OpenAI-compat layer, and Z.AI.
+   */
+  private normaliseOpenAIStop(reason: string | undefined): StopReason {
+    switch (reason) {
+      case 'stop':
+        return 'stop';
+      case 'tool_calls':
+      case 'function_call':           // legacy single-function shape
+        return 'tool_calls';
+      case 'length':
+        return 'length';
+      case 'content_filter':
+        return 'content_filter';
+      case undefined:
+      case null:
+      case '':
+        return 'unknown';
+      default:
+        return 'unknown';
+    }
   }
 
   private safeParseArgs(args: string): Record<string, unknown> {
