@@ -133,14 +133,14 @@ export class ToolExecutor {
   /** Reject file/bash operations that target paths outside the project root.
    *  Also normalises relative paths to absolute paths rooted at projectRoot. */
   private checkPathSandbox(toolCall: ToolCall): string | null {
-    const root = this.projectRoot;
+    const root = normalizePath(this.projectRoot);
 
     // File tools: validate and normalise path parameters
     const filePaths = ['path', 'filePath', 'dir'] as const;
     for (const key of filePaths) {
       const raw = toolCall.params[key];
       if (typeof raw === 'string' && raw.length > 0) {
-        const resolved = path.resolve(root, raw);
+        const resolved = normalizePath(path.resolve(this.projectRoot, raw));
         if (!isInside(resolved, root)) {
           return `Access denied: path "${raw}" resolves to "${resolved}", which is outside the project root "${root}".`;
         }
@@ -151,7 +151,7 @@ export class ToolExecutor {
 
     // Bash: validate cwd parameter
     if (toolCall.name === 'bash_execute' && typeof toolCall.params.cwd === 'string') {
-      const resolved = path.resolve(toolCall.params.cwd);
+      const resolved = normalizePath(path.resolve(this.projectRoot, toolCall.params.cwd));
       if (!isInside(resolved, root)) {
         return `Access denied: cwd "${toolCall.params.cwd}" is outside the project root "${root}".`;
       }
@@ -166,7 +166,31 @@ function isDangerousCommand(cmd: string): boolean {
   return DANGEROUS_COMMANDS.some(d => lower.includes(d));
 }
 
+/** Normalize a path for cross-platform comparison:
+ *  - Replace backslashes with forward slashes (Windows)
+ *  - Lowercase for case-insensitive filesystems (macOS, Windows)
+ *  - Resolve common macOS symlinks (/tmp → /private/tmp, /var → /private/var) */
+function normalizePath(p: string): string {
+  let normalized = p.replace(/\\/g, '/');
+  // macOS symlinks: /tmp → /private/tmp, /var → /private/var
+  if (process.platform === 'darwin') {
+    if (normalized.startsWith('/tmp/') || normalized === '/tmp') {
+      normalized = normalized.replace('/tmp', '/private/tmp');
+    }
+    if (normalized.startsWith('/var/') || normalized === '/var') {
+      normalized = normalized.replace('/var', '/private/var');
+    }
+  }
+  return normalized;
+}
+
 function isInside(target: string, root: string): boolean {
+  const a = normalizePath(target).toLowerCase();
+  const b = normalizePath(root).toLowerCase();
+  if (a === b) return true;
+  // Check if target starts with root + separator
+  if (a.startsWith(b + '/')) return true;
+  // Fallback: use path.relative for edge cases
   const rel = path.relative(root, target);
   return !rel.startsWith('..') && !path.isAbsolute(rel);
 }

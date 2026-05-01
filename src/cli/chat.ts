@@ -567,11 +567,13 @@ class InteractiveChat {
           fullContent: '',
           startedAt: Date.now(),
         };
-        // Capture file content before file_write/file_edit executes
+        // Capture file content before file_write/file_edit executes.
+        // Resolve to absolute path so the key matches after sandbox normalization.
         if (event.name === 'file_write' || event.name === 'file_edit') {
-          const filePath = String(params.path || params.filePath || '');
-          if (filePath) {
-            this.fileBeforeContent.set(filePath, readFileSafe(filePath));
+          const rawPath = String(params.path || params.filePath || '');
+          if (rawPath) {
+            const absPath = path.resolve(rawPath);
+            this.fileBeforeContent.set(absPath, readFileSafe(absPath));
           }
         }
         process.stdout.write(`\n${CYAN}${BOLD}▸${RESET} ${BOLD}#${stepNum}${RESET} ${CYAN}${event.name}${RESET}${GRAY}${paramStr}${RESET}\n`);
@@ -614,13 +616,14 @@ class InteractiveChat {
         if (event.status === 'success' && (toolName === 'file_write' || toolName === 'file_edit')) {
           const filePath = String(this.currentStep?.params?.path || this.currentStep?.params?.filePath || '');
           if (filePath) {
-            const before = this.fileBeforeContent.get(filePath) ?? '';
-            const after = readFileSafe(filePath);
-            const diffOutput = showFileDiff(before, after, filePath);
+            const absPath = path.resolve(filePath);
+            const before = this.fileBeforeContent.get(absPath) ?? '';
+            const after = readFileSafe(absPath);
+            const diffOutput = showFileDiff(before, after, absPath);
             if (diffOutput) {
               process.stdout.write(`\n${diffOutput}\n`);
             }
-            this.fileBeforeContent.delete(filePath);
+            this.fileBeforeContent.delete(absPath);
           }
         }
 
