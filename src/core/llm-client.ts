@@ -176,6 +176,12 @@ export class LLMClient {
     const resp = await this.chat(opts);
     if (resp.reasoning) yield { type: 'reasoning', text: resp.reasoning };
     if (resp.content) yield { type: 'content', text: resp.content };
+    if (resp.toolCalls) {
+      for (const tc of resp.toolCalls) {
+        yield { type: 'tool_call_start', toolCall: { id: tc.id, name: tc.name, argumentsDelta: '' } };
+        yield { type: 'tool_call_delta', toolCall: { id: '', name: '', argumentsDelta: JSON.stringify(tc.params) } };
+      }
+    }
     yield { type: 'done' };
   }
 

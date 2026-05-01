@@ -13,15 +13,26 @@ const DEFAULT_MODELS: Record<TaskType, ModelConfig> = {
 };
 
 export function loadConfig(overrides?: Partial<InsureAgentConfig>): InsureAgentConfig {
+  const provider = (process.env.DEFAULT_MODEL_PROVIDER as ModelProvider) || 'zhipu';
+  const model = process.env.DEFAULT_MODEL || 'glm-5.1';
+
+  // Resolve API key per provider — copilot uses OAuth (no static key)
+  const apiKey = provider === 'copilot'
+    ? undefined
+    : process.env[`${provider.toUpperCase()}_API_KEY`];
+
+  // Resolve base URL per provider
+  const baseUrl = process.env[`${provider.toUpperCase()}_BASE_URL`] || undefined;
+
   const config: InsureAgentConfig = {
     port: parseInt(process.env.INSURE_AGENT_PORT || '7008'),
     host: process.env.INSURE_AGENT_HOST || '0.0.0.0',
     dbPath: process.env.INSURE_AGENT_DB_PATH || './data/insure-agent.db',
     defaultModel: {
-      provider: (process.env.DEFAULT_MODEL_PROVIDER as ModelProvider) || 'zhipu',
-      model: process.env.DEFAULT_MODEL || 'glm-5.1',
-      apiKey: process.env.ZHIPU_API_KEY || process.env.OPENAI_API_KEY,
-      baseUrl: process.env.ZHIPU_BASE_URL || undefined,
+      provider,
+      model,
+      apiKey,
+      baseUrl: baseUrl || undefined,
     },
     modelRoutes: DEFAULT_MODELS,
     safetyLimits: {
