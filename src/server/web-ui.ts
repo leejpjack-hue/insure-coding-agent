@@ -127,17 +127,47 @@ export function attachWebUI(opts: WebUIOptions): void {
   // === serve static UI assets (CSS/JS) WITHOUT auth so the login prompt can
   // load styles before the user enters credentials. The HTML at '/' itself
   // is already trivial without the assets, so this is fine.
+  //
+  // We rely on the version query string (?v=<mtime>) injected into the HTML
+  // for cache-busting, so an aggressive 1-day cache here is safe — Cloudflare
+  // and the browser will refetch as soon as the URL changes.
   app.use('/web/static', express.static(staticDir, {
     fallthrough: true,
-    maxAge: '1h',
+    maxAge: '1d',
+    immutable: false,   // mtime can change (rebuild)
   }));
 
   // === everything else under /web is auth-gated ===
-  // root → chat HTML
+
+  /**
+   * Serve index.html with a runtime version stamp so static URLs become
+   * /web/static/app.js?v=<mtime> — Cloudflare and the browser see a fresh
+   * URL each rebuild and bypass any cached copy of the previous bundle.
+   *
+   * The HTML itself is sent with no-cache so the browser always re-fetches
+   * to pick up the latest version stamp.
+   */
   app.get('/web', basicAuth, (_req, res) => {
-    res.sendFile(path.join(staticDir, 'index.html'), (err) => {
-      if (err) res.status(500).type('text/plain').send(`UI not built — missing index.html (${(err as Error).message})`);
-    });
+    let html: string;
+    try {
+      html = fs.readFileSync(path.join(staticDir, 'index.html'), 'utf-8');
+    } catch (err) {
+      res.status(500).type('text/plain').send(`UI not built — missing index.html (${(err as Error).message})`);
+      return;
+    }
+    const version = (() => {
+      try {
+        const a = fs.statSync(path.join(staticDir, 'app.js')).mtimeMs;
+        const c = fs.statSync(path.join(staticDir, 'styles.css')).mtimeMs;
+        return Math.floor(Math.max(a, c)).toString(36);
+      } catch { return Date.now().toString(36); }
+    })();
+    html = html
+      .replace(/(\/web\/static\/[\w./-]+\.(?:js|css))(?:\?v=[^"'\s]+)?/g, `$1?v=${version}`);
+    res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.type('text/html').send(html);
   });
   app.get('/', basicAuth, (_req, res) => res.redirect(302, '/web'));
 
