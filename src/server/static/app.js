@@ -51,7 +51,133 @@
     }
   }
 
-  // ===== docs sidebar =====
+  // ===== docs sidebar (folder tree) =====
+  // Doc paths come back flat as 'designs/surrender-flow.md',
+  // 'requirements/foo/REQ-001.md', etc. We group them into a nested tree
+  // and render with HTML5 <details>/<summary> so the browser handles
+  // expand/collapse natively (no extra JS state to track).
+
+  // Remember which folders the user has manually collapsed across refreshes
+  // so a refreshDocs() doesn't re-open everything they closed.
+  const collapsedFolders = new Set();
+
+  /** Build a tree: { name, path, children: Map<name, node>, files: [...] } */
+  function buildTree(docs) {
+    const root = { name: '', path: '', children: new Map(), files: [] };
+    for (const doc of docs) {
+      const segments = doc.path.split('/').filter(Boolean);
+      let node = root;
+      for (let i = 0; i < segments.length - 1; i++) {
+        const seg = segments[i];
+        if (!node.children.has(seg)) {
+          const child = {
+            name: seg,
+            path: segments.slice(0, i + 1).join('/'),
+            children: new Map(),
+            files: [],
+          };
+          node.children.set(seg, child);
+        }
+        node = node.children.get(seg);
+      }
+      node.files.push(doc);
+    }
+    return root;
+  }
+
+  /** Recursively render a tree node into a fragment. */
+  function renderTreeNode(node, depth) {
+    const frag = document.createDocumentFragment();
+
+    // Sub-folders first (sorted alphabetically), then files (sorted by mtime)
+    const folders = [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name));
+    for (const folder of folders) {
+      const details = document.createElement('details');
+      details.className = 'tree-folder';
+      details.style.setProperty('--depth', depth);
+      details.open = !collapsedFolders.has(folder.path);
+      details.addEventListener('toggle', () => {
+        if (details.open) collapsedFolders.delete(folder.path);
+        else collapsedFolders.add(folder.path);
+      });
+
+      const summary = document.createElement('summary');
+      summary.className = 'tree-folder-label';
+      const fileCount = countFiles(folder);
+      summary.innerHTML =
+        `<span class="caret">▸</span>` +
+        `<span class="folder-icon">📁</span>` +
+        `<span class="folder-name"></span>` +
+        `<span class="folder-count"></span>`;
+      summary.querySelector('.folder-name').textContent = folder.name;
+      summary.querySelector('.folder-count').textContent = fileCount;
+      details.appendChild(summary);
+
+      const inner = document.createElement('div');
+      inner.className = 'tree-folder-body';
+      inner.appendChild(renderTreeNode(folder, depth + 1));
+      details.appendChild(inner);
+
+      frag.appendChild(details);
+    }
+
+    // Files (sorted by mtime desc — newest first)
+    const files = [...node.files].sort((a, b) => b.modified - a.modified);
+    for (const doc of files) {
+      frag.appendChild(renderFileNode(doc, depth));
+    }
+    return frag;
+  }
+
+  function countFiles(node) {
+    let n = node.files.length;
+    for (const c of node.children.values()) n += countFiles(c);
+    return n;
+  }
+
+  function renderFileNode(doc, depth) {
+    const row = document.createElement('div');
+    row.className = 'tree-file';
+    row.style.setProperty('--depth', depth);
+    row.title = doc.path;
+
+    const baseName = doc.path.split('/').pop();
+
+    const head = document.createElement('div');
+    head.className = 'tree-file-head';
+    head.innerHTML =
+      `<span class="file-icon">📄</span>` +
+      `<span class="file-name"></span>`;
+    head.querySelector('.file-name').textContent = baseName;
+
+    const meta = document.createElement('div');
+    meta.className = 'tree-file-meta';
+    const size = document.createElement('span');
+    size.textContent = humanBytes(doc.bytes);
+    const when = document.createElement('span');
+    when.textContent = humanTime(doc.modified);
+    const view = document.createElement('a');
+    view.href = `/web/docs/${encodeURI(doc.path)}?inline=1`;
+    view.target = '_blank';
+    view.rel = 'noopener';
+    view.textContent = 'view';
+    view.addEventListener('click', (e) => e.stopPropagation());
+    const dl = document.createElement('a');
+    dl.href = `/web/docs/${encodeURI(doc.path)}`;
+    dl.textContent = '↓';
+    dl.title = 'Download';
+    dl.addEventListener('click', (e) => e.stopPropagation());
+    meta.appendChild(size);
+    meta.appendChild(when);
+    meta.appendChild(view);
+    meta.appendChild(dl);
+
+    row.appendChild(head);
+    row.appendChild(meta);
+    row.addEventListener('click', () => view.click());
+    return row;
+  }
+
   async function refreshDocs() {
     docListEl.innerHTML = '<li class="hint">Loading…</li>';
     try {
@@ -62,38 +188,11 @@
         docListEl.innerHTML = '<li class="hint">No documents yet. Ask the agent to design something — generated files appear here.</li>';
         return;
       }
+      const tree = buildTree(docs);
       docListEl.innerHTML = '';
-      for (const doc of docs) {
-        const li = document.createElement('li');
-        const name = document.createElement('div');
-        name.className = 'doc-name';
-        name.textContent = doc.path;
-        const meta = document.createElement('div');
-        meta.className = 'doc-meta';
-        const size = document.createElement('span');
-        size.textContent = humanBytes(doc.bytes);
-        const when = document.createElement('span');
-        when.textContent = humanTime(doc.modified);
-        const dl = document.createElement('a');
-        dl.href = `/web/docs/${encodeURI(doc.path)}`;
-        dl.textContent = '↓ download';
-        dl.title = 'Download file';
-        dl.addEventListener('click', (e) => e.stopPropagation());
-        const view = document.createElement('a');
-        view.href = `/web/docs/${encodeURI(doc.path)}?inline=1`;
-        view.target = '_blank';
-        view.rel = 'noopener';
-        view.textContent = 'view';
-        view.addEventListener('click', (e) => e.stopPropagation());
-        meta.appendChild(size);
-        meta.appendChild(when);
-        meta.appendChild(view);
-        meta.appendChild(dl);
-        li.appendChild(name);
-        li.appendChild(meta);
-        li.addEventListener('click', () => view.click());
-        docListEl.appendChild(li);
-      }
+      // Replace the <ul> behaviour with a tree container — clear first
+      docListEl.style.padding = '0';
+      docListEl.appendChild(renderTreeNode(tree, 0));
     } catch (err) {
       docListEl.innerHTML = `<li class="hint" style="color:var(--red)">Failed to list docs: ${escapeHtml(err.message)}</li>`;
     }

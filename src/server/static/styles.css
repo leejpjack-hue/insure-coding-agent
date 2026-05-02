@@ -138,7 +138,7 @@ aside#sidebar {
   margin: 0;
   padding: 0;
 }
-.doc-list li, .session-list li {
+.session-list li {
   padding: 6px 12px;
   border-left: 2px solid transparent;
   cursor: pointer;
@@ -146,9 +146,96 @@ aside#sidebar {
   flex-direction: column;
   gap: 2px;
 }
-.doc-list li:hover, .session-list li:hover {
+.session-list li:hover {
   background: var(--panel-2);
   border-left-color: var(--accent);
+}
+
+/* === Folder tree (docs sidebar) === */
+/* indentation per nesting level: 12px base + 14px * depth */
+.tree-folder, .tree-file {
+  padding-left: calc(8px + 14px * var(--depth, 0));
+}
+.tree-folder { display: block; }
+
+/* native <details>/<summary> handles open/close — kill the default marker */
+.tree-folder > summary { list-style: none; cursor: pointer; }
+.tree-folder > summary::-webkit-details-marker { display: none; }
+
+.tree-folder-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+  user-select: none;
+  border-left: 2px solid transparent;
+}
+.tree-folder-label:hover {
+  background: var(--panel-2);
+  border-left-color: var(--accent);
+}
+.tree-folder-label .caret {
+  display: inline-block;
+  width: 10px;
+  color: var(--text-dim);
+  font-size: 10px;
+  transition: transform 120ms ease;
+}
+.tree-folder[open] > summary > .caret { transform: rotate(90deg); }
+.tree-folder-label .folder-icon { font-size: 13px; }
+.tree-folder-label .folder-name {
+  flex: 1;
+  font-weight: 500;
+  word-break: break-all;
+}
+.tree-folder-label .folder-count {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  background: var(--panel-2);
+  padding: 1px 6px;
+  border-radius: 9px;
+  min-width: 18px;
+  text-align: center;
+}
+.tree-folder-body { /* container for children — empty is fine */ }
+
+.tree-file {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 4px;
+  padding-right: 8px;
+  padding-bottom: 4px;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+}
+.tree-file:hover {
+  background: var(--panel-2);
+  border-left-color: var(--accent);
+}
+.tree-file-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.tree-file-head .file-icon { font-size: 12px; }
+.tree-file-head .file-name { word-break: break-all; }
+.tree-file-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding-left: 18px;     /* align under .file-name, past the icon */
+}
+.tree-file-meta a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.tree-file-meta a:hover { text-decoration: underline; }
+.tree-file-meta a:last-child {
+  font-weight: 600;        /* ↓ download arrow stands out */
 }
 .doc-name {
   font-size: 12.5px;
