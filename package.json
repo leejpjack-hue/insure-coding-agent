@@ -12,7 +12,8 @@
     "PHASES.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run copy-static",
+    "copy-static": "node -e \"const fs=require('fs');const path=require('path');const src=path.join('src','server','static');const dst=path.join('dist','server','static');fs.mkdirSync(dst,{recursive:true});for(const f of fs.readdirSync(src))fs.copyFileSync(path.join(src,f),path.join(dst,f));console.log('static copied:',fs.readdirSync(dst).join(', '));\"",
     "start": "node dist/main.js",
     "dev": "tsx src/main.ts",
     "cli": "tsx src/cli/index.ts",

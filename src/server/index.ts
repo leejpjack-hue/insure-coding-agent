@@ -11,6 +11,7 @@ import { createApiTester } from '../tools/api-tester.js';
 import { createComplianceChecker } from '../tools/compliance-checker.js';
 import { HookEngine } from '../hooks/hook-engine.js';
 import { registerBuiltinHooks } from '../hooks/builtin-hooks.js';
+import { attachWebUI, isWebUIEnabled } from './web-ui.js';
 
 export function createServer(config: InsureAgentConfig) {
   const app = express();
@@ -121,6 +122,19 @@ export function createServer(config: InsureAgentConfig) {
   app.get('/api/hooks', (_req, res) => {
     res.json(hookEngine.list());
   });
+
+  // Web UI (HTML chat + docs download). Mounted at /web. Disabled if
+  // WEB_USER / WEB_PASSWORD aren't set; the routes 503 until you do.
+  attachWebUI({
+    app,
+    orchestrator,
+    registry,
+    defaultModel: config.defaultModel,
+    projectRoot: process.cwd(),
+  });
+  if (!isWebUIEnabled()) {
+    console.warn('[web-ui] WEB_USER / WEB_PASSWORD not set — /web returns 503 until configured.');
+  }
 
   return { app, orchestrator, registry, hookEngine };
 }

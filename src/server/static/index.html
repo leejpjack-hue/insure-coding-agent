@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InsureAgent</title>
+  <link rel="stylesheet" href="/web/static/styles.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot"></span>
+      InsureAgent
+      <span class="version">web</span>
+    </div>
+    <div class="header-actions">
+      <span id="model-label" class="model-label">model: …</span>
+      <button id="new-session-btn" class="btn-secondary" title="Start a fresh session">New session</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <div class="sidebar-tabs">
+        <button class="sidebar-tab active" data-tab="docs">Documents</button>
+        <button class="sidebar-tab" data-tab="sessions">Sessions</button>
+      </div>
+      <div class="sidebar-panel" data-panel="docs">
+        <div class="sidebar-header">
+          <strong>docs/</strong>
+          <button id="refresh-docs" class="btn-icon" title="Refresh">↻</button>
+        </div>
+        <ul id="doc-list" class="doc-list"></ul>
+        <p class="hint">Click a row to view inline · ↓ to download</p>
+      </div>
+      <div class="sidebar-panel hidden" data-panel="sessions">
+        <ul id="session-list" class="session-list"></ul>
+      </div>
+    </aside>
+
+    <section id="chat">
+      <div id="messages" class="messages"></div>
+
+      <form id="composer" class="composer">
+        <textarea
+          id="input"
+          placeholder="Describe a feature, request a design doc, ask about the AMS… (Shift+Enter = new line)"
+          rows="3"
+        ></textarea>
+        <div class="composer-row">
+          <span id="status" class="status"></span>
+          <button type="submit" id="send-btn">Send</button>
+          <button type="button" id="cancel-btn" class="btn-secondary hidden">Cancel</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script src="/web/static/app.js" defer></script>
+</body>
+</html>
