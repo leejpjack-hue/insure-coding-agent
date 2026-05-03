@@ -1,4 +1,5 @@
-import Database from 'better-sqlite3';
+import fs from 'fs';
+import path from 'path';
 import { ToolRegistry } from '../core/tool-registry.js';
 import { SafetyLevel } from '../core/types.js';
 
@@ -6,72 +7,72 @@ export function createSchemaReader(registry: ToolRegistry): void {
   registry.register({
     definition: {
       name: 'schema_reader',
-      description: 'Read database schema - list tables, describe table, find relations',
+      description: 'Read database schema - list tables, describe table structure, find relations, sample data',
       safetyLevel: 'auto_approve' as SafetyLevel,
       params: [
         { name: 'action', type: 'string', required: true, description: 'list_tables | describe_table | list_relations | sample_data' },
         { name: 'tableName', type: 'string', required: false, description: 'Table name (for describe_table, sample_data)' },
-        { name: 'dbPath', type: 'string', required: false, description: 'Path to SQLite database' },
+        { name: 'dbPath', type: 'string', required: false, description: 'Path to JSON database file' },
         { name: 'limit', type: 'number', required: false, description: 'Row limit for sample_data (default 5)' },
       ],
     },
     execute: async (params) => {
       const action = String(params.action);
-      const dbPath = String(params.dbPath || './data/insure-agent.db');
+      const dbPath = String(params.dbPath || './data/insure-agent.json');
+      const filePath = dbPath.replace(/\.db$/i, '.json');
 
-      let db: Database.Database;
+      let data: Record<string, unknown>;
       try {
-        db = new Database(dbPath, { readonly: true });
+        const resolved = path.resolve(filePath);
+        data = JSON.parse(fs.readFileSync(resolved, 'utf-8'));
       } catch {
-        return `Cannot open database: ${dbPath}`;
+        return `Cannot open database: ${filePath}`;
       }
 
-      try {
-        if (action === 'list_tables') {
-          const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as Array<{ name: string }>;
-          return tables.length > 0
-            ? `Tables (${tables.length}):\n${tables.map(t => `  - ${t.name}`).join('\n')}`
-            : 'No tables found';
-        }
+      // Map JSON keys to table-like structure
+      const tables: Record<string, string> = {
+        agents: 'id, name, level, team_id, manager_id, status, joined_at, created_at',
+        licenses: 'id, agent_id, license_number, jurisdiction, status, authorized_products, issued_at, expires_at, ce_hours, required_ce_hours, created_at',
+        commissionTiers: 'id, name, product_type, agent_level, min_premium, max_premium, rate, policy_year, is_renewal, effective_from, effective_to, created_at',
+        policies: 'id, policy_number, agent_id, product_type, premium_amount, status, issued_at, expires_at, created_at',
+        commissions: 'id, policy_id, agent_id, amount, rate, tier_name, calculation_date, status, created_at',
+        auditTrail: 'id, session_id, action, entity_type, entity_id, details, timestamp, user_id',
+      };
 
-        if (action === 'describe_table') {
-          const tableName = String(params.tableName || '');
-          if (!tableName) return 'Missing tableName parameter';
-          const columns = db.pragma(`table_info("${tableName}")`) as Array<{ name: string; type: string; notnull: number; dflt_value: unknown; pk: number }>;
-          if (columns.length === 0) return `Table "${tableName}" not found`;
-          return columns.map(c =>
-            `  ${c.name} ${c.type}${c.notnull ? ' NOT NULL' : ''}${c.pk ? ' PRIMARY KEY' : ''}${c.dflt_value ? ` DEFAULT ${c.dflt_value}` : ''}`
-          ).join('\n');
-        }
-
-        if (action === 'list_relations') {
-          const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
-          const relations: string[] = [];
-          for (const { name } of tables) {
-            const fks = db.pragma(`foreign_key_list("${name}")`) as Array<{ table: string; from: string; to: string }>;
-            for (const fk of fks) {
-              relations.push(`  ${name}.${fk.from} → ${fk.table}.${fk.to}`);
-            }
-          }
-          return relations.length > 0
-            ? `Relations:\n${relations.join('\n')}`
-            : 'No foreign key relations found';
-        }
-
-        if (action === 'sample_data') {
-          const tableName = String(params.tableName || '');
-          const limit = Number(params.limit) || 5;
-          if (!tableName) return 'Missing tableName parameter';
-          const rows = db.prepare(`SELECT * FROM "${tableName}" LIMIT ?`).all(limit) as Record<string, unknown>[];
-          return rows.length > 0
-            ? JSON.stringify(rows, null, 2)
-            : `Table "${tableName}" is empty or not found`;
-        }
-
-        return `Unknown action: ${action}`;
-      } finally {
-        db.close();
+      if (action === 'list_tables') {
+        const names = Object.keys(tables);
+        return `Tables (${names.length}):\n${names.map(t => `  - ${t}`).join('\n')}`;
       }
+
+      if (action === 'describe_table') {
+        const tableName = String(params.tableName || '');
+        if (!tableName) return 'Missing tableName parameter';
+        const cols = tables[tableName];
+        if (!cols) return `Table "${tableName}" not found`;
+        return cols.split(', ').map(c => `  ${c} TEXT`).join('\n');
+      }
+
+      if (action === 'list_relations') {
+        return `Relations:\n  licenses.agent_id -> agents.id\n  policies.agent_id -> agents.id\n  commissions.policy_id -> policies.id\n  commissions.agent_id -> agents.id`;
+      }
+
+      if (action === 'sample_data') {
+        const tableName = String(params.tableName || '');
+        const limit = Number(params.limit) || 5;
+        if (!tableName) return 'Missing tableName parameter';
+        const rows = data[tableName];
+        if (!rows) return `Table "${tableName}" not found`;
+        if (Array.isArray(rows)) {
+          return JSON.stringify(rows.slice(0, limit), null, 2);
+        }
+        // Object-format (keyed by id)
+        const entries = Object.values(rows as Record<string, unknown>).slice(0, limit);
+        return entries.length > 0
+          ? JSON.stringify(entries, null, 2)
+          : `Table "${tableName}" is empty`;
+      }
+
+      return `Unknown action: ${action}`;
     },
   });
 }

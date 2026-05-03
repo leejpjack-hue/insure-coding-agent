@@ -9,7 +9,7 @@ const db = initDatabase(config.dbPath);
 
 app.listen(config.port, config.host, () => {
   console.log(`InsureAgent server running on http://${config.host}:${config.port}`);
-  console.log(`Database: ${config.dbPath}`);
+  console.log(`Database: ${config.dbPath.replace(/\.db$/i, '.json')}`);
   console.log(`API: http://${config.host}:${config.port}/api/health`);
 });
 

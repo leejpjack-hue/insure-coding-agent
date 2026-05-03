@@ -1,59 +1,58 @@
-import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import { Session, Message, AgentState, ModelConfig } from './types.js';
 
+interface SessionStore {
+  sessions: Record<string, Session & { modelConfigJson: string; stateJson: string }>;
+  messages: Record<string, Message[]>;
+}
+
 export class SessionManager {
-  private db: Database.Database;
+  private filePath: string;
+  private store: SessionStore;
+  private dirty = false;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(dbPath: string) {
-    const dir = path.dirname(dbPath);
+    // dbPath used to be ./data/insure-agent.db — change extension to .json
+    this.filePath = dbPath.replace(/\.db$/i, '.json');
+    const dir = path.dirname(this.filePath);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.initTables();
+    this.store = this.load();
   }
 
-  private initTables(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        project_root TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        model_config TEXT NOT NULL,
-        state TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
+  private load(): SessionStore {
+    try {
+      if (fs.existsSync(this.filePath)) {
+        const raw = fs.readFileSync(this.filePath, 'utf-8');
+        return JSON.parse(raw) as SessionStore;
+      }
+    } catch {
+      // Corrupted file — start fresh
+    }
+    return { sessions: {}, messages: {} };
+  }
 
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        tool_call TEXT,
-        tool_result TEXT,
-        timestamp INTEGER NOT NULL,
-        checkpoint_id TEXT,
-        FOREIGN KEY (session_id) REFERENCES sessions(id)
-      );
+  private scheduleFlush(): void {
+    if (this.flushTimer) return;
+    this.dirty = true;
+    this.flushTimer = setTimeout(() => {
+      this.flush();
+      this.flushTimer = null;
+    }, 500);
+  }
 
-      CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
-
-      CREATE TABLE IF NOT EXISTS audit_trail (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        action TEXT NOT NULL,
-        details TEXT,
-        timestamp INTEGER NOT NULL,
-        user_id TEXT
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_trail(session_id, timestamp);
-    `);
+  private flush(): void {
+    if (!this.dirty) return;
+    try {
+      fs.writeFileSync(this.filePath, JSON.stringify(this.store, null, 2), 'utf-8');
+      this.dirty = false;
+    } catch {
+      // Best effort
+    }
   }
 
   createSession(projectRoot: string, modelConfig: ModelConfig): Session {
@@ -83,39 +82,43 @@ export class SessionManager {
       updatedAt: now,
     };
 
-    this.db.prepare(
-      'INSERT INTO sessions (id, project_root, status, model_config, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).run(id, projectRoot, 'active', JSON.stringify(modelConfig), JSON.stringify(state), now, now);
+    this.store.sessions[id] = {
+      ...session,
+      modelConfigJson: JSON.stringify(modelConfig),
+      stateJson: JSON.stringify(state),
+    };
+    this.store.messages[id] = [];
+    this.scheduleFlush();
 
     return session;
   }
 
   getSession(id: string): Session | null {
-    const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as any;
+    const row = this.store.sessions[id];
     if (!row) return null;
 
     return {
       id: row.id,
-      projectRoot: row.project_root,
+      projectRoot: row.projectRoot,
       status: row.status,
-      modelConfig: JSON.parse(row.model_config),
-      state: JSON.parse(row.state),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      modelConfig: JSON.parse(row.modelConfigJson),
+      state: JSON.parse(row.stateJson),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
     };
   }
 
   updateSession(id: string, updates: Partial<Pick<Session, 'status' | 'state'>>): boolean {
-    const session = this.getSession(id);
-    if (!session) return false;
+    const row = this.store.sessions[id];
+    if (!row) return false;
 
-    const status = updates.status || session.status;
-    const state = updates.state || session.state;
-
-    this.db.prepare(
-      'UPDATE sessions SET status = ?, state = ?, updated_at = ? WHERE id = ?'
-    ).run(status, JSON.stringify(state), Date.now(), id);
-
+    if (updates.status) row.status = updates.status;
+    if (updates.state) {
+      row.stateJson = JSON.stringify(updates.state);
+      row.state = updates.state;
+    }
+    row.updatedAt = Date.now();
+    this.scheduleFlush();
     return true;
   }
 
@@ -130,75 +133,69 @@ export class SessionManager {
   forkSession(id: string): Session | null {
     const session = this.getSession(id);
     if (!session) return null;
-
-    const forked = this.createSession(session.projectRoot, session.modelConfig);
-    return forked;
+    return this.createSession(session.projectRoot, session.modelConfig);
   }
 
   addMessage(message: Omit<Message, 'id'>): Message {
     const id = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    const msg: Message = { id, ...message };
-
-    this.db.prepare(
-      'INSERT INTO messages (id, session_id, role, content, tool_call, tool_result, timestamp, checkpoint_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(
+    const msg: Message = {
       id,
-      message.sessionId,
-      message.role,
-      message.content,
-      message.toolCall ? JSON.stringify(message.toolCall) : null,
-      message.toolResult ? JSON.stringify(message.toolResult) : null,
-      message.timestamp,
-      message.checkpointId || null
-    );
+      sessionId: message.sessionId,
+      role: message.role,
+      content: message.content,
+      toolCall: message.toolCall,
+      toolResult: message.toolResult,
+      timestamp: message.timestamp,
+      checkpointId: message.checkpointId,
+    };
+
+    if (!this.store.messages[message.sessionId]) {
+      this.store.messages[message.sessionId] = [];
+    }
+    this.store.messages[message.sessionId].push(msg);
 
     // Update session updatedAt
-    this.db.prepare('UPDATE sessions SET updated_at = ? WHERE id = ?').run(Date.now(), message.sessionId);
+    const row = this.store.sessions[message.sessionId];
+    if (row) row.updatedAt = Date.now();
 
+    this.scheduleFlush();
     return msg;
   }
 
   getHistory(sessionId: string, limit: number = 100): Message[] {
-    const rows = this.db.prepare(
-      'SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?'
-    ).all(sessionId, limit) as any[];
-
-    return rows.reverse().map(row => ({
-      id: row.id,
-      sessionId: row.session_id,
-      role: row.role,
-      content: row.content,
-      toolCall: row.tool_call ? JSON.parse(row.tool_call) : undefined,
-      toolResult: row.tool_result ? JSON.parse(row.tool_result) : undefined,
-      timestamp: row.timestamp,
-      checkpointId: row.checkpoint_id || undefined,
-    }));
+    const msgs = this.store.messages[sessionId] || [];
+    return msgs.slice(-limit);
   }
 
   listSessions(status?: string): Session[] {
-    const rows = status
-      ? this.db.prepare('SELECT * FROM sessions WHERE status = ? ORDER BY updated_at DESC').all(status) as any[]
-      : this.db.prepare('SELECT * FROM sessions ORDER BY updated_at DESC').all() as any[];
+    const sessions = Object.values(this.store.sessions)
+      .filter(s => !status || s.status === status)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
 
-    return rows.map(row => ({
+    return sessions.map(row => ({
       id: row.id,
-      projectRoot: row.project_root,
+      projectRoot: row.projectRoot,
       status: row.status,
-      modelConfig: JSON.parse(row.model_config),
-      state: JSON.parse(row.state),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      modelConfig: JSON.parse(row.modelConfigJson),
+      state: JSON.parse(row.stateJson),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
     }));
   }
 
   deleteSession(id: string): boolean {
-    this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(id);
-    this.db.prepare('DELETE FROM audit_trail WHERE session_id = ?').run(id);
-    const result = this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
-    return result.changes > 0;
+    if (!this.store.sessions[id]) return false;
+    delete this.store.sessions[id];
+    delete this.store.messages[id];
+    this.scheduleFlush();
+    return true;
   }
 
   close(): void {
-    this.db.close();
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.flush();
   }
 }
