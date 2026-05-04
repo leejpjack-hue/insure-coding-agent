@@ -6,6 +6,8 @@ import { initDatabase } from '../core/database.js';
 import { AgentLoop, AgentEvent } from '../core/agent-loop.js';
 import { ToolRegistry } from '../core/tool-registry.js';
 import { SessionManager } from '../core/session.js';
+import { MemoryManager } from '../core/memory.js';
+import { SkillGenerator } from '../core/skill-generator.js';
 import { ModelRouter } from '../core/model-router.js';
 import { createFileTools } from '../tools/file-tools.js';
 import { createBashTool } from '../tools/bash-tool.js';
@@ -14,6 +16,7 @@ import { createLicenseChecker } from '../tools/license-checker.js';
 import { createSchemaReader } from '../tools/schema-reader.js';
 import { createApiTester } from '../tools/api-tester.js';
 import { createComplianceChecker } from '../tools/compliance-checker.js';
+import { safeFetch } from '../core/http.js';
 import { ModelConfig } from '../core/types.js';
 import { MarkdownRenderer } from './markdown.js';
 import { readFileSafe, showFileDiff } from './diff.js';
@@ -74,6 +77,8 @@ interface Step {
 class InteractiveChat {
   private rl: readline.Interface;
   private sessionManager: SessionManager;
+  private memoryManager: MemoryManager;
+  private skillGenerator: SkillGenerator;
   private modelRouter: ModelRouter;
   private registry: ToolRegistry;
   private modelConfig: ModelConfig;
@@ -104,6 +109,8 @@ class InteractiveChat {
 
     this.registry = setupRegistry();
     this.sessionManager = new SessionManager(config.dbPath);
+    this.memoryManager = new MemoryManager(config.dbPath.replace(/\.db$/i, '') + 'memory.json');
+    this.skillGenerator = new SkillGenerator();
     this.modelRouter = new ModelRouter(config.defaultModel);
     this.modelConfig = config.defaultModel;
   }
@@ -207,6 +214,68 @@ class InteractiveChat {
         return;
       }
 
+      // /remember <text> — save a fact or preference
+      const rememberMatch = input.match(/^\/remember\s+(.+)$/);
+      if (rememberMatch) {
+        const text = rememberMatch[1].trim();
+        this.memoryManager.addFact('user_preference', text, `session:${this.sessionId ?? 'cli'}`);
+        process.stdout.write(`${GREEN}✓${RESET} Remembered: ${GRAY}${truncate(text, 80)}${RESET}\n`);
+        this.rl.prompt();
+        return;
+      }
+
+      // /forget <text> — remove a fact
+      const forgetMatch = input.match(/^\/forget\s+(.+)$/);
+      if (forgetMatch) {
+        const text = forgetMatch[1].trim();
+        const removed = this.memoryManager.removeFact(text);
+        if (removed) {
+          process.stdout.write(`${GREEN}✓${RESET} Forgot: ${GRAY}${truncate(text, 80)}${RESET}\n`);
+        } else {
+          process.stdout.write(`${YELLOW}No matching fact found.${RESET}\n`);
+        }
+        this.rl.prompt();
+        return;
+      }
+
+      // /memory — list all stored facts
+      if (input === '/memory') {
+        const facts = this.memoryManager.listFacts();
+        if (facts.length === 0) {
+          process.stdout.write(`${GRAY}No memories stored yet. Use ${RESET}${CYAN}/remember <text>${RESET}${GRAY} to save one.${RESET}\n`);
+        } else {
+          process.stdout.write(`\n${BOLD}Memories (${facts.length})${RESET}\n`);
+          for (const f of facts.slice(0, 20)) {
+            const time = new Date(f.created_at).toLocaleDateString();
+            process.stdout.write(`  ${GRAY}[${f.category}]${RESET} ${f.content} ${DIM}(${time})${RESET}\n`);
+          }
+          if (facts.length > 20) {
+            process.stdout.write(`  ${GRAY}…${facts.length - 20} more${RESET}\n`);
+          }
+          process.stdout.write('\n');
+        }
+        this.rl.prompt();
+        return;
+      }
+
+      // /skills — list learned skill documents
+      if (input === '/skills') {
+        const skills = this.skillGenerator.listSkills();
+        if (skills.length === 0) {
+          process.stdout.write(`${GRAY}No skills learned yet. Complex tasks (3+ tools) are auto-saved.${RESET}\n`);
+        } else {
+          process.stdout.write(`\n${BOLD}Skills (${skills.length})${RESET}\n`);
+          for (const s of skills) {
+            const time = new Date(s.created_at).toLocaleDateString();
+            process.stdout.write(`  ${CYAN}${s.title}${RESET} ${GRAY}(${time})${RESET}\n`);
+            process.stdout.write(`    ${DIM}${truncate(s.summary, 80)}${RESET}\n`);
+          }
+          process.stdout.write('\n');
+        }
+        this.rl.prompt();
+        return;
+      }
+
       // Unknown slash command — do NOT forward to the LLM. The model gets
       // confused by stray "/foo" tokens and goes into a re-read loop.
       if (input.startsWith('/')) {
@@ -255,6 +324,10 @@ class InteractiveChat {
     process.stdout.write(`  ${CYAN}/last${RESET}        Expand the most recent step\n`);
     process.stdout.write(`  ${CYAN}/model${RESET}       Show or switch model ${GRAY}(/model zhipu/glm-5.1)${RESET}\n`);
     process.stdout.write(`  ${CYAN}/models${RESET}      List available models (live from provider)${RESET}\n`);
+    process.stdout.write(`  ${CYAN}/remember${RESET}    Save a fact or preference ${GRAY}(/remember text)${RESET}\n`);
+    process.stdout.write(`  ${CYAN}/forget${RESET}      Remove a saved fact ${GRAY}(/forget text)${RESET}\n`);
+    process.stdout.write(`  ${CYAN}/memory${RESET}      List all saved memories${RESET}\n`);
+    process.stdout.write(`  ${CYAN}/skills${RESET}      List auto-learned skill documents${RESET}\n`);
     process.stdout.write(`  ${CYAN}/cancel${RESET}      Cancel the running task ${GRAY}(also Ctrl+C)${RESET}\n`);
     process.stdout.write(`  ${CYAN}exit${RESET}         Quit\n\n`);
   }
@@ -386,7 +459,7 @@ class InteractiveChat {
     if (provider === 'copilot') {
       const { getCopilotToken } = await import('../core/copilot-auth.js');
       const token = await getCopilotToken();
-      const r = await fetch('https://api.githubcopilot.com/models', {
+      const r = await safeFetch('https://api.githubcopilot.com/models', {
         headers: {
           'authorization': `Bearer ${token}`,
           'editor-version': 'vscode/1.95.0',
@@ -418,7 +491,7 @@ class InteractiveChat {
     }
 
     const apiKey = await this.resolveApiKey(provider);
-    const r = await fetch(url, {
+    const r = await safeFetch(url, {
       headers: {
         'authorization': `Bearer ${apiKey}`,
         'content-type': 'application/json',
@@ -487,6 +560,8 @@ class InteractiveChat {
         projectRoot: process.cwd(),
         registry: this.registry,
         sessionManager: this.sessionManager,
+        memoryManager: this.memoryManager,
+        skillGenerator: this.skillGenerator,
         onEvent: (event) => this.displayEvent(event),
       });
 
@@ -670,6 +745,7 @@ class InteractiveChat {
     this.stopSpinner();
     if (this.mdRenderer) { this.mdRenderer.end(); this.mdRenderer = null; }
     if (this.sessionManager) this.sessionManager.close();
+    if (this.memoryManager) this.memoryManager.close();
     process.stdout.write(`\n${GRAY}Goodbye.${RESET}\n`);
     process.exit(0);
   }

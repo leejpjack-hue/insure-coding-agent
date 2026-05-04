@@ -2,6 +2,8 @@ import { Message, ModelConfig, ToolDefinition } from './types.js';
 import { ToolRegistry } from './tool-registry.js';
 import { LSPClient } from './lsp-client.js';
 import { getKnowledgeBase, KBHit } from '../knowledge/knowledge-base.js';
+import { MemoryManager } from './memory.js';
+import { SkillGenerator } from './skill-generator.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -15,6 +17,8 @@ export interface ContextOptions {
   amsContext?: string;
   /** Disable automatic KB retrieval (e.g. for tests). */
   skipKnowledgeRetrieval?: boolean;
+  memoryManager?: MemoryManager;
+  skillGenerator?: SkillGenerator;
 }
 
 export class ContextAssembler {
@@ -24,6 +28,17 @@ export class ContextAssembler {
     sections.push(this.buildSystemPrompt());
     sections.push(this.buildProjectContext(opts.projectRoot));
     sections.push(this.buildAgentMd(opts.projectRoot));
+
+    // Cross-session memory (facts + skills)
+    if (opts.memoryManager) {
+      const memCtx = opts.memoryManager.buildMemoryContext(opts.task);
+      if (memCtx) sections.push(memCtx);
+    }
+    if (opts.skillGenerator) {
+      const skillCtx = opts.skillGenerator.buildSkillsContext(opts.task);
+      if (skillCtx) sections.push(skillCtx);
+    }
+
     sections.push(this.buildToolList(opts.registry));
     if (!opts.skipKnowledgeRetrieval) {
       const kb = this.buildKnowledgeBaseHits(opts.task, opts.history);

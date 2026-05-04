@@ -9,6 +9,8 @@ import { ThinkingLoop, ThinkingLoopOptions, ThinkingLoopState } from './thinking
 import { CheckpointManager } from './checkpoint.js';
 import { SessionManager } from './session.js';
 import { SafetyManager } from './safety-manager.js';
+import { MemoryManager } from './memory.js';
+import { SkillGenerator } from './skill-generator.js';
 import { eventBus } from './events.js';
 
 // Events emitted by the agent loop for CLI display
@@ -29,6 +31,8 @@ export interface AgentLoopOptions {
   projectRoot: string;
   registry: ToolRegistry;
   sessionManager: SessionManager;
+  memoryManager?: MemoryManager;
+  skillGenerator?: SkillGenerator;
   modelConfig?: ModelConfig;
   maxIterations?: number;
   maxConsecutiveFails?: number;
@@ -58,6 +62,8 @@ export class AgentLoop {
   private thinkingLoop: ThinkingLoop;
   private checkpointManager: CheckpointManager;
   private sessionManager: SessionManager;
+  private memoryManager?: MemoryManager;
+  private skillGenerator?: SkillGenerator;
   private safetyManager: SafetyManager;
   private registry: ToolRegistry;
   private sessionId: string;
@@ -67,6 +73,7 @@ export class AgentLoop {
   private onEvent?: (event: AgentEvent) => void;
 
   private filesModified: Set<string> = new Set();
+  private toolsUsedThisTask: string[] = [];
   private testsRun: number = 0;
   private testsPassed: number = 0;
   private totalTokensUsed: number = 0;
@@ -78,6 +85,8 @@ export class AgentLoop {
     this.projectRoot = opts.projectRoot;
     this.registry = opts.registry;
     this.sessionManager = opts.sessionManager;
+    this.memoryManager = opts.memoryManager;
+    this.skillGenerator = opts.skillGenerator;
     this.maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.onEvent = opts.onEvent;
 
@@ -120,6 +129,7 @@ export class AgentLoop {
 
     this.startedAt = Date.now();
     this.filesModified = new Set();
+    this.toolsUsedThisTask = [];
     this.testsRun = 0;
     this.testsPassed = 0;
     this.totalTokensUsed = 0;
@@ -140,6 +150,8 @@ export class AgentLoop {
         task,
         history,
         registry: this.registry,
+        memoryManager: this.memoryManager,
+        skillGenerator: this.skillGenerator,
       });
 
       let response: LLMResponse;
@@ -253,6 +265,12 @@ export class AgentLoop {
     }
 
     const state = this.finalizeAgentState();
+
+    // Trigger memory learning on task completion
+    if (state.status !== 'failed' && (this.memoryManager || this.skillGenerator)) {
+      this.learnFromTask(task, state);
+    }
+
     this.onEvent?.({
       type: 'complete',
       result: state.status === 'failed' ? 'Task failed' : 'Task completed',
@@ -534,6 +552,7 @@ export class AgentLoop {
     });
 
     this.trackToolSideEffects(toolCall, toolResult.content);
+    this.toolsUsedThisTask.push(toolCall.name);
 
     if (toolResult.status === 'error') {
       this.thinkingLoop.recordFailure(`Tool error: ${toolResult.content}`);
@@ -662,6 +681,26 @@ export class AgentLoop {
         },
       },
     }));
+  }
+
+  private learnFromTask(task: string, state: AgentState): void {
+    if (this.memoryManager) {
+      const history = this.sessionManager.getHistory(this.sessionId);
+      this.memoryManager.summarizeSession(
+        history.map(m => ({ role: m.role, content: m.content })),
+        this.sessionId,
+      );
+    }
+    if (this.skillGenerator && this.toolsUsedThisTask.length >= 3) {
+      const lastAssistant = [...this.sessionManager.getHistory(this.sessionId)]
+        .reverse().find(m => m.role === 'assistant');
+      this.skillGenerator.generateSkillDoc({
+        task,
+        toolsUsed: this.toolsUsedThisTask,
+        sessionId: this.sessionId,
+        outcome: lastAssistant?.content ?? state.status,
+      });
+    }
   }
 
   private finalizeAgentState(): AgentState {

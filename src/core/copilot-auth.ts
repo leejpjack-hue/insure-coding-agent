@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { safeFetch } from './http.js';
 
 // Public client id (GitHub Copilot for VS Code) — same value the official
 // extension uses. Not a secret.
@@ -81,7 +82,7 @@ export interface DeviceCodeResponse {
 }
 
 async function requestDeviceCode(): Promise<DeviceCodeResponse> {
-  const r = await fetch(DEVICE_CODE_URL, {
+  const r = await safeFetch(DEVICE_CODE_URL, {
     method: 'POST',
     headers: HEADERS_GH,
     body: JSON.stringify({ client_id: CLIENT_ID, scope: SCOPE }),
@@ -96,7 +97,7 @@ async function pollForAccessToken(deviceCode: string, intervalSec: number, expir
 
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, interval));
-    const r = await fetch(ACCESS_TOKEN_URL, {
+    const r = await safeFetch(ACCESS_TOKEN_URL, {
       method: 'POST',
       headers: HEADERS_GH,
       body: JSON.stringify({
@@ -119,7 +120,7 @@ async function pollForAccessToken(deviceCode: string, intervalSec: number, expir
 }
 
 async function fetchGithubUser(token: string): Promise<{ login: string; id: number }> {
-  const r = await fetch(USER_URL, {
+  const r = await safeFetch(USER_URL, {
     headers: { ...HEADERS_GH, authorization: `token ${token}` },
   });
   if (!r.ok) throw new Error(`Failed to fetch GitHub user: ${r.status}`);
@@ -167,7 +168,7 @@ export async function getCopilotToken(): Promise<string> {
     throw new Error('Not logged in to GitHub Copilot. Run: insure-agent auth login');
   }
 
-  const r = await fetch(COPILOT_TOKEN_URL, {
+  const r = await safeFetch(COPILOT_TOKEN_URL, {
     headers: { ...HEADERS_GH, authorization: `token ${file.github_token}` },
   });
   if (r.status === 401) {

@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { ModelConfig, Message, ToolCall, ToolResult } from './types.js';
+import { safeFetch } from './http.js';
 
 /** Canonical stop reasons mapped from provider-specific finish_reason / stop_reason. */
 export type StopReason =
@@ -118,7 +119,7 @@ export class LLMClient {
 
     let response: Response;
     try {
-      response = await fetch(baseUrl, {
+      response = await safeFetch(baseUrl, {
         method: 'POST',
         headers: this.buildHeaders(model.provider, apiKey),
         body: JSON.stringify(this.buildBody(opts)),
@@ -152,7 +153,7 @@ export class LLMClient {
 
     let response: Response;
     try {
-      response = await fetch(baseUrl, {
+      response = await safeFetch(baseUrl, {
         method: 'POST',
         headers: this.buildHeaders(model.provider, apiKey),
         body: JSON.stringify(body),

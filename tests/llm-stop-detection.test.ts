@@ -2,7 +2,7 @@
 // We exercise parseResponse() and the typed-error contract directly without
 // hitting any provider.
 
-import { describe, it } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   LLMClient,
@@ -11,21 +11,21 @@ import {
   StopReason,
   LLMResponse,
 } from '../src/core/llm-client.js';
-
-// LLMClient.parseResponse is private; we get at it the same way the real
-// `chat()` does — by stubbing fetch with a minimal Response and letting it
-// exercise the full path.
-function withFakeFetch<T>(handler: (req: { url: string; init: RequestInit }) => Response | Promise<Response>, run: () => Promise<T>): Promise<T> {
-  const original = global.fetch;
-  global.fetch = ((url: string, init: RequestInit) => Promise.resolve(handler({ url, init }))) as typeof fetch;
-  return run().finally(() => { global.fetch = original; });
-}
+import { setTestFetch } from '../src/core/http.js';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function withFakeFetch<T>(
+  handler: (req: { url: string; init: RequestInit }) => Response | Promise<Response>,
+  run: () => Promise<T>,
+): Promise<T> {
+  setTestFetch((url, init) => Promise.resolve(handler({ url, init: init! })));
+  return run().finally(() => setTestFetch(null));
 }
 
 describe('LLMClient stop-reason normalisation', () => {
