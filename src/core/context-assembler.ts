@@ -180,13 +180,15 @@ For every design document that involves user-facing screens, produce a detailed 
   - Responsive behavior: layout changes for mobile/tablet/desktop
   - Accessibility notes: ARIA labels, tab order, keyboard navigation
 
-**Step 2.5 — Requirement Gap Analysis (MANDATORY)**
-Before generating any requirements, you MUST run the \`requirement_gap_analyzer\` tool:
+**Step 2.5 — Requirement Gap Analysis**
+Before generating requirements, run the \`requirement_gap_analyzer\` tool:
 - Call: \`requirement_gap_analyzer\` with \`content\` = the design document text (or your current understanding of the feature)
 - Review the readiness score and the list of missing questions
-- If readiness is below 100%, ask the user the missing questions and wait for answers
-- Re-run the analysis after incorporating answers until readiness reaches 100%
-- ONLY proceed to Step 3 when the gap analyzer confirms all categories are covered
+- If readiness is below 100%, present the missing questions to the user and ask:
+  - Do you want to answer these questions now, OR
+  - Should the agent fill in reasonable assumptions based on insurance domain expertise?
+- If the user chooses to skip, proceed with best-practice assumptions and clearly mark them as \`[Assumption]\` in the requirements
+- Either way, proceed to Step 3 after this analysis
 
 **Step 3 — JIRA Requirement Files**
 For every design document, generate requirement files:
