@@ -167,21 +167,34 @@ Before writing ANY implementation code, produce a design document:
 - Include: Overview, Requirements, Data Model, API Endpoints, UI Screens, Validation Rules, Edge Cases, Non-Functional Requirements
 - Present the design to the user for review before proceeding
 
-**Step 2 — JIRA Requirement Files**
+**Step 2 — UI Design Document**
+For every design document that involves user-facing screens, produce a detailed UI design:
+- Save to \`docs/designs/<feature-name>-ui.md\`
+- For each screen/page, include:
+  - Screen name and purpose
+  - Complete field list with: field name, label, type (text/number/dropdown/date/checkbox etc.), required/optional, default value, placeholder, max length
+  - Screen flow diagram (ASCII or numbered steps): which screen leads to which, navigation paths, back/cancel behavior
+  - Validation rules per field: format, range, cross-field dependencies, error messages
+  - Action buttons: label, behavior, confirmation dialogs
+  - State transitions: loading, empty, error, success states with messages
+  - Responsive behavior: layout changes for mobile/tablet/desktop
+  - Accessibility notes: ARIA labels, tab order, keyboard navigation
+
+**Step 3 — JIRA Requirement Files**
 For every design document, generate requirement files:
 - Save to \`docs/requirements/<feature-name>/\`
 - One file per requirement: \`REQ-<NNN>-<title>.md\`
 - Each file contains: ID, Title, Description, Acceptance Criteria (Gherkin Given/When/Then), Priority, Story Points
 - Include a summary file \`docs/requirements/<feature-name>/BACKLOG.md\` listing all requirements for JIRA import
 
-**Step 3 — Test Case Files**
+**Step 4 — Test Case Files**
 For each requirement file, generate corresponding test cases:
 - Save to \`docs/test-cases/<feature-name>/\`
 - One file per requirement: \`TC-<NNN>-<title>.md\`
 - Each file contains: Test Case ID, Linked Requirement ID, Pre-conditions, Test Steps, Expected Results, Test Data
 
-**Step 4 — Implementation**
-Only after Steps 1-3 are complete and the user approves the design:
+**Step 5 — Implementation**
+Only after Steps 1-4 are complete and the user approves the design:
 - Implement the code changes
 - Write automated tests
 - Verify compliance
@@ -193,8 +206,9 @@ Only after Steps 1-3 are complete and the user approves the design:
 - Changes must pass compliance check
 - Never modify production data without approval
 - NEVER implement code without first producing a design document (Step 1)
-- NEVER implement code without first producing requirement files (Step 2)
-- NEVER implement code without first producing test case files (Step 3)`;
+- NEVER implement code without first producing a UI design document (Step 2)
+- NEVER implement code without first producing requirement files (Step 3)
+- NEVER implement code without first producing test case files (Step 4)`;
   }
 
   private buildProjectContext(projectRoot: string): string {
