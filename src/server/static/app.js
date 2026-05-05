@@ -497,6 +497,7 @@
     let event = 'message';
     let data = '';
     for (const line of lines) {
+      if (line.startsWith(':')) continue; // SSE comment / heartbeat — ignore
       if (line.startsWith('event:')) event = line.slice(6).trim();
       else if (line.startsWith('data:')) data += line.slice(5).trim();
     }

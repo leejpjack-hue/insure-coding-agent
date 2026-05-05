@@ -228,9 +228,17 @@ export function attachWebUI(opts: WebUIOptions): void {
     res.flushHeaders();
 
     const send = (eventName: string, data: unknown) => {
-      res.write(`event: ${eventName}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      try {
+        res.write(`event: ${eventName}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch { /* client disconnected */ }
     };
+
+    // Heartbeat: send SSE comment every 15s to keep the connection alive
+    // through Cloudflare/nginx proxies that cut idle connections.
+    const heartbeat = setInterval(() => {
+      try { res.write(': heartbeat\n\n'); } catch { /* disconnected */ }
+    }, 15000);
 
     // Resolve session
     let sessionId = body.sessionId;
@@ -264,6 +272,7 @@ export function attachWebUI(opts: WebUIOptions): void {
     } catch (err) {
       send('error', { message: (err as Error).message });
     } finally {
+      clearInterval(heartbeat);
       try { res.end(); } catch { /* already closed */ }
     }
   });
