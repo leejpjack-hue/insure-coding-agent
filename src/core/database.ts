@@ -20,7 +20,10 @@ export function initDatabase(dbPath: string): { close: () => void; getData: () =
   let data: JsonDatabase;
   try {
     if (fs.existsSync(filePath)) {
-      data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      // Merge with empty db so missing keys get defaults (file may contain
+      // other data like sessions that coexist in the same JSON file)
+      data = { ...createEmptyDb(), ...raw };
     } else {
       data = createEmptyDb();
     }
