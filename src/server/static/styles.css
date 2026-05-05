@@ -472,7 +472,37 @@ button.btn-secondary:hover { background: var(--border); }
 
 .hidden { display: none !important; }
 
+/* Hamburger menu toggle (hidden on desktop) */
+.menu-toggle {
+  display: none;
+  font-size: 20px;
+  padding: 2px 6px;
+}
+
+/* Mobile overlay backdrop */
+#sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 99;
+}
+
 @media (max-width: 760px) {
   main { grid-template-columns: 1fr; }
-  aside#sidebar { display: none; }
+  .menu-toggle { display: inline-block; }
+  aside#sidebar {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 300px;
+    z-index: 100;
+    box-shadow: var(--shadow);
+  }
+  aside#sidebar.open {
+    display: flex;
+  }
+  #sidebar-backdrop.show {
+    display: block;
+  }
 }

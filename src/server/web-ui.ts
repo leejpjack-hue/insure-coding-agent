@@ -219,8 +219,12 @@ export function attachWebUI(opts: WebUIOptions): void {
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // tell nginx not to buffer SSE
+    // Connection header is illegal in HTTP/2 — only set for HTTP/1.1
+    const httpVersion = req.httpVersion;
+    if (httpVersion === '1.0' || httpVersion === '1.1') {
+      res.setHeader('Connection', 'keep-alive');
+    }
+    res.setHeader('X-Accel-Buffering', 'no'); // tell nginx/Cloudflare not to buffer SSE
     res.flushHeaders();
 
     const send = (eventName: string, data: unknown) => {

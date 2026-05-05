@@ -28,6 +28,7 @@
   refreshSessions();
   setupTabSwitcher();
   setupComposer();
+  setupMobileMenu();
   $('refresh-docs').addEventListener('click', refreshDocs);
   $('new-session-btn').addEventListener('click', () => {
     sessionId = null;
@@ -256,6 +257,23 @@
         setStatus('Cancelled.', 'error');
         cleanupActive();
       }
+    });
+  }
+
+  // ===== mobile menu =====
+  function setupMobileMenu() {
+    const menuBtn = $('menu-btn');
+    const sidebar = $('sidebar');
+    const backdrop = $('sidebar-backdrop');
+    if (!menuBtn || !sidebar || !backdrop) return;
+
+    menuBtn.addEventListener('click', () => {
+      sidebar.classList.toggle('open');
+      backdrop.classList.toggle('show');
+    });
+    backdrop.addEventListener('click', () => {
+      sidebar.classList.remove('open');
+      backdrop.classList.remove('show');
     });
   }
 

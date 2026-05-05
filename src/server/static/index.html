@@ -4,11 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>InsureAgent</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡</text></svg>">
   <link rel="stylesheet" href="/web/static/styles.css">
 </head>
 <body>
   <header>
     <div class="brand">
+      <button id="menu-btn" class="btn-icon menu-toggle" title="Menu">☰</button>
       <span class="dot"></span>
       InsureAgent
       <span class="version">web</span>
@@ -20,6 +22,7 @@
   </header>
 
   <main>
+    <div id="sidebar-backdrop"></div>
     <aside id="sidebar">
       <div class="sidebar-tabs">
         <button class="sidebar-tab active" data-tab="docs">Documents</button>
