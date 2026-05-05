@@ -16,6 +16,7 @@ import { createLicenseChecker } from '../tools/license-checker.js';
 import { createSchemaReader } from '../tools/schema-reader.js';
 import { createApiTester } from '../tools/api-tester.js';
 import { createComplianceChecker } from '../tools/compliance-checker.js';
+import { createRequirementGapAnalyzer } from '../tools/requirement-gap-analyzer.js';
 import { safeFetch } from '../core/http.js';
 import { ModelConfig } from '../core/types.js';
 import { MarkdownRenderer } from './markdown.js';
@@ -58,6 +59,7 @@ function setupRegistry(): ToolRegistry {
   createSchemaReader(registry);
   createApiTester(registry);
   createComplianceChecker(registry);
+  createRequirementGapAnalyzer(registry);
   return registry;
 }
 

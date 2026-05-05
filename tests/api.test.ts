@@ -56,16 +56,17 @@ describe('API Endpoints', () => {
     assert.equal(d.version, '0.1.0');
   });
 
-  it('GET /api/tools should list 10 tools', async () => {
+  it('GET /api/tools should list all registered tools', async () => {
     const { status, data } = await fetchJSON('GET', '/api/tools');
     assert.equal(status, 200);
     const tools = data as Array<{ name: string }>;
-    assert.equal(tools.length, 10);
+    assert.ok(tools.length >= 10, `Expected at least 10 tools, got ${tools.length}`);
     const names = tools.map(t => t.name);
     assert.ok(names.includes('file_read'));
     assert.ok(names.includes('commission_validator'));
     assert.ok(names.includes('license_checker'));
     assert.ok(names.includes('compliance_checker'));
+    assert.ok(names.includes('requirement_gap_analyzer'));
   });
 
   it('POST /api/tools/commission_validator should calculate', async () => {

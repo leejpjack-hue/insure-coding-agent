@@ -9,6 +9,7 @@ import { createLicenseChecker } from '../tools/license-checker.js';
 import { createSchemaReader } from '../tools/schema-reader.js';
 import { createApiTester } from '../tools/api-tester.js';
 import { createComplianceChecker } from '../tools/compliance-checker.js';
+import { createRequirementGapAnalyzer } from '../tools/requirement-gap-analyzer.js';
 import { HookEngine } from '../hooks/hook-engine.js';
 import { registerBuiltinHooks } from '../hooks/builtin-hooks.js';
 import { attachWebUI, isWebUIEnabled } from './web-ui.js';
@@ -26,6 +27,7 @@ export function createServer(config: InsureAgentConfig) {
   createSchemaReader(registry);
   createApiTester(registry);
   createComplianceChecker(registry);
+  createRequirementGapAnalyzer(registry);
 
   // Setup hooks
   const hookEngine = new HookEngine();
