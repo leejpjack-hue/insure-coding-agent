@@ -79,6 +79,7 @@ export class AgentLoop {
   private totalTokensUsed: number = 0;
   private totalCost: number = 0;
   private startedAt: number = 0;
+  private reasoningContinuations: number = 0;
 
   constructor(opts: AgentLoopOptions) {
     this.sessionId = opts.sessionId;
@@ -134,6 +135,7 @@ export class AgentLoop {
     this.testsPassed = 0;
     this.totalTokensUsed = 0;
     this.totalCost = 0;
+    this.reasoningContinuations = 0;
 
     this.sessionManager.addMessage({
       sessionId: this.sessionId,
@@ -214,7 +216,32 @@ export class AgentLoop {
         if (response.stopReason === 'length') {
           continue;
         }
-        // 4. Provider exposed stopReason but it's not 'stop' (e.g. 'unknown',
+        // 4. Unknown stop + heavy reasoning with minimal content — model was
+        //    cut off mid-thinking (common with GLM-5.1's shared token budget).
+        //    The model spent all tokens on reasoning and never reached its
+        //    planned tool calls. Continue the loop with a prompt that tells it
+        //    to skip re-analysis and call tools directly.
+        if (response.stopReason === 'unknown'
+            && response.reasoning && response.reasoning.length > 500
+            && (!response.content || response.content.trim().length < 100)
+            && this.reasoningContinuations < 3) {
+          this.reasoningContinuations++;
+          // Include the tail of the reasoning so the model can pick up
+          // where it left off without re-analysing from scratch.
+          const tail = response.reasoning.slice(-1500);
+          this.sessionManager.addMessage({
+            sessionId: this.sessionId,
+            role: 'user',
+            content: `[System: Your previous response was cut off during reasoning. ` +
+              `You already have all the information from previous tool calls — DO NOT re-read files or re-analyze. ` +
+              `End of your previous reasoning:\n"""\n${tail}\n"""\n` +
+              `Call file_write (or the appropriate tool) NOW to create the document you were planning. ` +
+              `Keep your thinking brief and go straight to the tool call.]`,
+            timestamp: Date.now(),
+          });
+          continue;
+        }
+        // 5. Provider exposed stopReason but it's not 'stop' (e.g. 'unknown',
         //    'content_filter') — treat substantial text as a final answer.
         //    Without this, GLM-5.1 (which sometimes emits tool-call
         //    *announcements* as content) would loop forever.
@@ -222,10 +249,14 @@ export class AgentLoop {
           // anything other than the explicit-stop / explicit-length cases
           // already handled above falls through to the fallback heuristic.
         }
-        // 5. Fallback heuristic for providers that don't expose stopReason
-        //    (or report 'unknown'): a reply over ~50 chars in content OR
-        //    reasoning is almost always final. After 3 iterations of
-        //    empty/short text, give up.
+        // 6. Fallback heuristic for providers that don't expose stopReason
+        //    (or report 'unknown'): a reply with substantial *content* is
+        //    almost always final. Pure-reasoning responses with no content
+        //    are handled by case 4 above.
+        if (response.content && response.content.trim().length > 50) {
+          this.thinkingLoop.markCompleted();
+          break;
+        }
         const totalText = (response.content || '') + (response.reasoning || '');
         if (totalText.length > 50) {
           this.thinkingLoop.markCompleted();
