@@ -260,6 +260,8 @@ export function attachWebUI(opts: WebUIOptions): void {
       sessionManager: sessionMgr as unknown as ConstructorParameters<typeof AgentLoop>[0]['sessionManager'],
       modelConfig: body.modelOverride || defaultModel,
       onEvent,
+      // Auto-approve all need_confirmation tools in web UI (file_write, file_edit, bash)
+      needApproval: async () => true,
     });
 
     // Hang up cleanly if the client navigates away

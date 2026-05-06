@@ -223,9 +223,11 @@ export class AgentLoop {
           // already handled above falls through to the fallback heuristic.
         }
         // 5. Fallback heuristic for providers that don't expose stopReason
-        //    (or report 'unknown'): a reply over ~50 chars is almost always
-        //    final. After 3 iterations of empty/short text, give up.
-        if ((response.content || '').length > 50) {
+        //    (or report 'unknown'): a reply over ~50 chars in content OR
+        //    reasoning is almost always final. After 3 iterations of
+        //    empty/short text, give up.
+        const totalText = (response.content || '') + (response.reasoning || '');
+        if (totalText.length > 50) {
           this.thinkingLoop.markCompleted();
           break;
         }
